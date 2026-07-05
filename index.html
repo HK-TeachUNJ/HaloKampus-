@@ -99,6 +99,7 @@ img{max-width:100%;display:block}
 .status-menunggu_pihak_lain{background:#F5F3FF;color:#7C3AED}
 .status-selesai{background:var(--green-soft);color:var(--green)}
 .status-terlambat{background:#FEE2E2;color:var(--red)}
+.status-dibatalkan{background:#F1F5F9;color:#475569}
 
 /* ============================
    CARDS
@@ -273,6 +274,11 @@ img{max-width:100%;display:block}
 .chat-input-area{padding:.875rem 1rem;border-top:1px solid var(--border);display:flex;gap:.625rem;align-items:flex-end;background:var(--white);flex-shrink:0}
 .chat-input{flex:1;min-height:42px;max-height:120px;padding:.625rem .875rem;border:1.5px solid var(--border);border-radius:var(--r);font-size:.875rem;resize:none;outline:none;transition:border-color .15s;font-family:inherit}
 .chat-input:focus{border-color:var(--blue)}
+.msg-actions{display:none;gap:.25rem;margin-top:.25rem}
+.msg-wrap:hover .msg-actions{display:flex}
+.msg-action-btn{background:none;border:1px solid var(--border);border-radius:6px;padding:.15rem .45rem;font-size:.7rem;cursor:pointer;color:var(--text-gray);transition:all .12s}
+.msg-action-btn:hover{background:var(--bg);color:var(--text)}
+.msg-deleted{font-style:italic;opacity:.6}
 
 /* ============================
    MODALS
@@ -410,6 +416,33 @@ table tbody tr:last-child td{border-bottom:none}
   .hero-actions .btn{width:100%;justify-content:center}
   .notif-dropdown{width:300px;right:-1rem}
 }
+
+/* ============================
+   FINAL PATCH — chat actions, trash chat, todo, search
+   ============================ */
+.msg-actions{pointer-events:auto;position:relative;z-index:5}
+.msg-action-btn{pointer-events:auto;position:relative;z-index:6;min-width:28px;min-height:24px;background:rgba(255,255,255,.92)}
+.msg-wrap.mine .msg-action-btn{background:rgba(255,255,255,.96)}
+.search-match{outline:2px solid var(--yellow);outline-offset:2px;border-radius:12px}
+.search-match-text{background:#FEF9C3;border-radius:6px;padding:.15rem .25rem}
+.todo-item{background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:.85rem 1rem;display:flex;gap:.75rem;align-items:flex-start;margin-bottom:.6rem;transition:all .15s}
+.todo-item:hover{box-shadow:var(--shadow-md);border-color:var(--blue)}
+.todo-item.completed{opacity:.68}
+.todo-item.completed .todo-title{text-decoration:line-through}
+.todo-check{width:18px;height:18px;margin-top:.15rem;accent-color:var(--green);cursor:pointer;flex-shrink:0}
+.todo-title{font-weight:700;font-size:.9rem;color:var(--text)}
+.todo-meta{font-size:.75rem;color:var(--text-gray);margin-top:.2rem}
+.todo-actions{margin-left:auto;display:flex;gap:.35rem;flex-shrink:0}
+.todo-filter-btn{border:1px solid var(--border);background:var(--white);border-radius:999px;padding:.35rem .8rem;font-size:.78rem;font-weight:600;cursor:pointer}
+.todo-filter-btn.active{background:var(--blue);border-color:var(--blue);color:#fff}
+.global-search-dropdown{position:absolute;top:calc(100% + .4rem);left:0;right:0;background:var(--white);border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);z-index:500;max-height:380px;overflow:auto}
+.global-search-item{padding:.75rem .9rem;border-bottom:1px solid var(--border);cursor:pointer}
+.global-search-item:hover{background:var(--blue-soft)}
+.global-search-item:last-child{border-bottom:none}
+.global-search-type{font-size:.68rem;font-weight:800;text-transform:uppercase;color:var(--blue);letter-spacing:.04em}
+.global-search-title{font-size:.86rem;font-weight:700;color:var(--text);margin-top:.18rem}
+.global-search-sub{font-size:.75rem;color:var(--text-gray);margin-top:.1rem;line-height:1.4}
+
 </style>
 </head>
 <body>
@@ -472,6 +505,19 @@ let reminderInterval = null;
 let chatRealtime = null;
 let openRequestId = null;
 let searchTimeout = null;
+let catFilterSemua = '';
+let catFilterMhs = '';
+let catFilterRiwayat = '';
+let presetCategory = null;
+let statusFilterSemua = '';
+let priorityFilterSemua = '';
+let sampahTab = 'request';
+let todoFilter = 'semua';
+let chatSearchMatches = [];
+let chatSearchIndex = -1;
+let botSearchTerm = '';
+let globalSearchTimeout = null;
+window._chatMsgMap = {};
 
 // ============================================================
 // UTILS
@@ -483,6 +529,7 @@ const fmt = d => d ? new Date(d).toLocaleDateString('id-ID',{day:'2-digit',month
 const fmtTime = d => d ? new Date(d).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}) : '-';
 const fmtDt = d => d ? fmt(d)+' '+fmtTime(d) : '-';
 const initials = name => name ? name.split(' ').slice(0,2).map(w=>w[0]).join('').toUpperCase() : '?';
+const escapeHtml = s => (s===null||s===undefined) ? '' : String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const timeAgo = d => {
   if(!d) return '';
   const diff = (Date.now()-new Date(d).getTime())/1000;
@@ -494,7 +541,8 @@ const timeAgo = d => {
 const statusLabel = s => ({
   belum_diproses:'Belum Diproses', menunggu_diproses:'Menunggu Diproses',
   sedang_diproses:'Sedang Diproses', menunggu_data_tambahan:'Menunggu Data Tambahan',
-  menunggu_pihak_lain:'Menunggu Pihak Lain', selesai:'Selesai', terlambat:'Terlambat'
+  menunggu_pihak_lain:'Menunggu Pihak Lain', selesai:'Selesai', terlambat:'Terlambat',
+  dibatalkan:'Dibatalkan'
 }[s] || s);
 
 function showToast(msg, type='info', duration=3500) {
@@ -964,6 +1012,7 @@ window.doLogin = async function(e) {
     if(error) { showError(errEl, error.message==='Invalid login credentials'?'Email atau password salah.':error.message); btn.disabled=false; btn.textContent='Masuk'; return; }
     currentUser = data.user;
     await loadProfile();
+    if(!currentUser) { render(); return; } // account deactivated
     render();
   } catch(err) {
     clearTimeout(timer); showError(errEl,'Terjadi kesalahan. Periksa koneksi Anda.'); btn.disabled=false; btn.textContent='Masuk';
@@ -1010,13 +1059,101 @@ function showError(el, msg) {
   el.classList.remove('hidden'); el.textContent = msg;
 }
 
+function getErrorMessage(error) {
+  if(!error) return 'Terjadi kesalahan. Silakan cek konfigurasi Supabase.';
+  if(typeof error === 'string') return error;
+  if(error.message) {
+    let msg = error.message;
+    if(error.details && error.details !== error.message) msg += ' — ' + error.details;
+    if(error.hint) msg += ' (Petunjuk: ' + error.hint + ')';
+    return msg;
+  }
+  if(error.error_description) return error.error_description;
+  const str = JSON.stringify(error);
+  if(str && str !== '{}' && str !== 'null') return str;
+  return 'Terjadi kesalahan. Silakan cek konfigurasi Supabase.';
+}
+
+// ============================================================
+// PERMISSION & TRASH HELPERS
+// ============================================================
+// Hak atur status: milik PENERIMA request, bukan berdasarkan role saja.
+// - request.recipient_id === currentUser.id  -> penerima langsung (mhs/dosen/admin bisa jadi penerima)
+// - request.recipient_type === 'admin' && currentProfile.role === 'admin' -> penerima grup admin
+function canUpdateStatus(request) {
+  if(!request || !currentUser || !currentProfile) return false;
+  if(request.recipient_id === currentUser.id) return true;
+  if(request.recipient_type === 'admin' && currentProfile.role === 'admin') return true;
+  return false;
+}
+
+// Query admin harus longgar: request yang admin KIRIM, request ke grup admin,
+// ATAU (jarang) request dengan recipient_id langsung = admin.
+function applyAdminRequestFilter(query, uid) {
+  return query.or(`sender_id.eq.${uid},recipient_type.eq.admin,recipient_id.eq.${uid}`);
+}
+
+// Request dianggap "di Sampah" jika sudah dibatalkan ATAU deleted_at terisi
+// (deleted_at ditambahkan belakangan, jadi data lama yang hanya punya status
+// 'dibatalkan' tetap harus dikenali sebagai sampah).
+function isTrashed(r) {
+  return !!r && (r.status === 'dibatalkan' || !!r.deleted_at);
+}
+
+function excludeTrashed(reqs) {
+  return (reqs||[]).filter(r=>!isTrashed(r));
+}
+
+
+const ACTIVE_REQUEST_STATUSES = ['belum_diproses','menunggu_diproses','sedang_diproses','menunggu_data_tambahan','menunggu_pihak_lain','terlambat'];
+function isActiveRequest(r) {
+  return !!r && !isTrashed(r) && ACTIVE_REQUEST_STATUSES.includes(r.status);
+}
+function onlyActiveRequests(reqs) {
+  return (reqs||[]).filter(isActiveRequest);
+}
+function onlyCompletedRequests(reqs) {
+  return (reqs||[]).filter(r=>r && !isTrashed(r) && r.status==='selesai');
+}
+function priorityBadgeHtml(r) {
+  if(!isActiveRequest(r)) return '';
+  return `<span class="status-badge ${r.priority==='urgent'?'priority-urgent':r.priority==='low'?'priority-low':'priority-normal'}">${r.priority==='urgent'?'🔴 Urgent':r.priority==='low'?'Low':'Normal'}</span>`;
+}
+function plusDaysIso(base, days) {
+  const d = new Date(base || Date.now());
+  d.setDate(d.getDate()+days);
+  return d.toISOString();
+}
+async function maybeReopenRequestOnNewMessage(requestId) {
+  const {data:req,error} = await sb.from('requests').select('id,status,completed_at,priority').eq('id',requestId).single();
+  if(error || !req || req.status!=='selesai' || !req.completed_at) return;
+  const diffMs = Date.now() - new Date(req.completed_at).getTime();
+  const sevenDaysMs = 7*24*60*60*1000;
+  if(diffMs <= sevenDaysMs) {
+    await sb.from('requests').update({
+      status:'menunggu_diproses',
+      completed_at:null,
+      reopened_at:new Date().toISOString(),
+      priority:'urgent'
+    }).eq('id',requestId);
+  }
+}
+
 // ============================================================
 // DASHBOARD RENDER
 // ============================================================
 async function loadProfile() {
   if(!currentUser) return;
   const {data} = await sb.from('profiles').select('*').eq('id',currentUser.id).single();
-  if(data) currentProfile = data;
+  if(data) {
+    currentProfile = data;
+    if(data.is_active === false) {
+      stopIntervals(); cleanupRealtime();
+      await sb.auth.signOut();
+      currentUser = null; currentProfile = null;
+      showToast('Akun Anda telah dinonaktifkan. Silakan hubungi administrator.', 'error', 8000);
+    }
+  }
 }
 
 const sidebarMenus = {
@@ -1028,6 +1165,7 @@ const sidebarMenus = {
     {id:'jadwal',icon:'📅',label:'Jadwal Pribadi'},
     {id:'status-tracking',icon:'🔍',label:'Status Tracking'},
     {id:'riwayat',icon:'📚',label:'Riwayat'},
+    {id:'sampah-chat',icon:'🗑️',label:'Sampah Chat'},
     {id:'profil',icon:'👤',label:'Profil'},
     {id:'pengaturan',icon:'⚙️',label:'Pengaturan'},
   ],
@@ -1039,6 +1177,7 @@ const sidebarMenus = {
     {id:'atur-bot',icon:'🤖',label:'Atur Bot HaloKampus'},
     {id:'jadwal',icon:'📅',label:'Jadwal Pribadi'},
     {id:'riwayat',icon:'📚',label:'Riwayat'},
+    {id:'sampah-chat',icon:'🗑️',label:'Sampah Chat'},
     {id:'profil',icon:'👤',label:'Profil'},
     {id:'pengaturan',icon:'⚙️',label:'Pengaturan'},
   ],
@@ -1106,6 +1245,44 @@ function renderDashboard(app) {
           <div class="loading-overlay"><div class="spinner"></div><p class="loading-text">Memuat...</p></div>
         </main>
       </div>
+    </div>
+    <div id="edit-request-modal" class="modal-overlay hidden" onclick="if(event.target===this)this.classList.add('hidden')">
+      <div class="modal-box">
+        <div class="modal-header">
+          <h3>Edit Request</h3>
+          <button class="modal-close" onclick="$('edit-request-modal').classList.add('hidden')">✕</button>
+        </div>
+        <form id="edit-req-form" onsubmit="saveEditRequest(event)" style="display:flex;flex-direction:column;gap:1rem">
+          <input type="hidden" id="er-id"/>
+          <div class="form-group">
+            <label class="form-label">Kategori</label>
+            <select class="form-input form-select" id="er-cat" onchange="if(this.value==='Lainnya'){$('er-cat-other-group').classList.remove('hidden')}else{$('er-cat-other-group').classList.add('hidden')}">
+              ${['Bimbingan Akademik','Skripsi/Tugas Akhir','Administrasi Akademik','Perizinan','Jadwal Perkuliahan','Tugas/Perkuliahan','Surat Menyurat','Kendala LMS/SIAKAD','Pembayaran/UKT','Informasi Kampus','Lainnya'].map(c=>`<option value="${c}">${c}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group hidden" id="er-cat-other-group">
+            <label class="form-label">Kategori Lainnya</label>
+            <input class="form-input" type="text" id="er-cat-other" placeholder="Tuliskan kategori"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Subjek</label>
+            <input class="form-input" type="text" id="er-subject" required placeholder="Subjek request"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Deskripsi / Pesan</label>
+            <textarea class="form-input" id="er-desc" rows="4" required style="resize:vertical"></textarea>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Tenggat Waktu</label>
+            <input class="form-input" type="datetime-local" id="er-due" required/>
+          </div>
+          <div id="er-error" class="form-error hidden"></div>
+          <div style="display:flex;gap:.75rem">
+            <button class="btn btn-primary" type="submit" style="flex:1" id="er-btn">Simpan Perubahan</button>
+            <button class="btn btn-ghost" type="button" onclick="$('edit-request-modal').classList.add('hidden')">Batal</button>
+          </div>
+        </form>
+      </div>
     </div>`;
 
   setupDashListeners();
@@ -1116,12 +1293,26 @@ function renderDashboard(app) {
 }
 
 function setupDashListeners() {
-  let guard = false;
   const overlay = $('sidebar-overlay');
   if(overlay) overlay.onclick = () => closeSidebar();
   document.addEventListener('keydown', e => {
-    if(e.key==='Escape') { closeSidebar(); closeNotifDropdown(); }
+    if(e.key==='Escape') { closeSidebar(); closeNotifDropdown(); closeGlobalSearch(); }
   }, {once:false});
+
+  const searchInput = $('topbar-search');
+  if(searchInput && !searchInput.dataset.bound) {
+    searchInput.dataset.bound = '1';
+    searchInput.addEventListener('input', () => {
+      clearTimeout(globalSearchTimeout);
+      globalSearchTimeout = setTimeout(()=>performGlobalSearch(searchInput.value), 250);
+    });
+    searchInput.addEventListener('keydown', e => {
+      if(e.key === 'Escape') {
+        searchInput.value = '';
+        closeGlobalSearch();
+      }
+    });
+  }
 }
 
 window.toggleSidebar = function() { sidebarOpen ? closeSidebar() : openSidebar(); };
@@ -1161,6 +1352,7 @@ async function loadDashPage(page) {
     else if(page==='jadwal') await renderJadwal(body);
     else if(page==='status-tracking') await renderStatusTracking(body);
     else if(page==='riwayat') await renderRiwayat(body);
+    else if(page==='sampah-chat') await renderSampahChat(body);
     else if(page==='semua-request') await renderSemuaRequest(body);
     else if(page==='kirim-pesan') await renderKirimPesan(body);
     else if(page==='monitoring') await renderMonitoring(body);
@@ -1185,14 +1377,15 @@ async function renderDashHome(body) {
   let statsData = {};
   if(role==='mahasiswa') {
     const [rSent,rInbox,rUnread,rSchedule] = await Promise.all([
-      sb.from('requests').select('id,status,priority').eq('sender_id',uid),
-      sb.from('requests').select('id,status').eq('recipient_id',uid),
+      sb.from('requests').select('id,status,priority,deleted_at').eq('sender_id',uid),
+      sb.from('requests').select('id,status,deleted_at').eq('recipient_id',uid),
       sb.from('request_messages').select('id').eq('is_read',false).neq('sender_id',uid),
       sb.from('schedule_events').select('id').eq('user_id',uid).gte('start_time',today+'T00:00:00').lte('start_time',today+'T23:59:59'),
     ]);
-    const reqs = rSent.data||[];
+    const reqs = onlyActiveRequests(excludeTrashed(rSent.data));
+    const inboxReqs = onlyActiveRequests(excludeTrashed(rInbox.data));
     statsData = {
-      total:reqs.length, inbox:(rInbox.data||[]).length,
+      total:reqs.length, inbox:inboxReqs.length,
       belum:reqs.filter(r=>r.status==='belum_diproses').length,
       proses:reqs.filter(r=>r.status==='sedang_diproses').length,
       selesai:reqs.filter(r=>r.status==='selesai').length,
@@ -1201,11 +1394,11 @@ async function renderDashHome(body) {
   } else {
     let reqQ;
     if(role==='admin') {
-      reqQ = await sb.from('requests').select('id,status,priority').eq('recipient_type','admin');
+      reqQ = await applyAdminRequestFilter(sb.from('requests').select('id,status,priority,deleted_at'), uid);
     } else {
-      reqQ = await sb.from('requests').select('id,status,priority').eq('recipient_id',uid);
+      reqQ = await sb.from('requests').select('id,status,priority,deleted_at').eq('recipient_id',uid);
     }
-    const reqs = reqQ.data||[];
+    const reqs = onlyActiveRequests(excludeTrashed(reqQ.data));
     const schedule = await sb.from('schedule_events').select('id').eq('user_id',uid).gte('start_time',today+'T00:00:00').lte('start_time',today+'T23:59:59');
     statsData = {
       total:reqs.length, urgent:reqs.filter(r=>r.priority==='urgent').length,
@@ -1219,15 +1412,32 @@ async function renderDashHome(body) {
   let allReqs = [];
   if(role==='mahasiswa') {
     const {data} = await sb.from('requests').select('*,recipient:profiles!requests_recipient_id_fkey(full_name,role,nim,nidn,fakultas)').eq('sender_id',uid).order('created_at',{ascending:false}).limit(10);
-    allReqs = data||[];
+    allReqs = onlyActiveRequests(excludeTrashed(data));
   } else if(role==='admin') {
-    const {data} = await sb.from('requests').select('*,sender:profiles!requests_sender_id_fkey(full_name,nim,nidn,fakultas,program_studi,role)').eq('recipient_type','admin').order('created_at',{ascending:false}).limit(10);
-    allReqs = data||[];
+    const {data} = await applyAdminRequestFilter(sb.from('requests').select('*,sender:profiles!requests_sender_id_fkey(full_name,nim,nidn,fakultas,program_studi,role),recipient:profiles!requests_recipient_id_fkey(full_name,nim,nidn,fakultas,program_studi,role)'), uid).order('created_at',{ascending:false}).limit(10);
+    allReqs = onlyActiveRequests(excludeTrashed(data));
   } else {
     const {data} = await sb.from('requests').select('*,sender:profiles!requests_sender_id_fkey(full_name,nim,nidn,fakultas,program_studi,role)').eq('recipient_id',uid).order('created_at',{ascending:false}).limit(10);
-    allReqs = data||[];
+    allReqs = onlyActiveRequests(excludeTrashed(data));
   }
   allReqs = sortRequests(allReqs);
+
+  // Data kategori (tanpa limit, khusus untuk ringkasan kategori) — kecualikan request di Sampah
+  let catReqsAll = [];
+  if(role==='mahasiswa') {
+    const [cSent,cInbox] = await Promise.all([
+      sb.from('requests').select('id,category,status,deleted_at').eq('sender_id',uid),
+      sb.from('requests').select('id,category,status,deleted_at').eq('recipient_id',uid)
+    ]);
+    catReqsAll = onlyActiveRequests(excludeTrashed([...(cSent.data||[]),...(cInbox.data||[])]));
+  } else if(role==='admin') {
+    const {data} = await applyAdminRequestFilter(sb.from('requests').select('id,category,status,deleted_at'), uid);
+    catReqsAll = onlyActiveRequests(excludeTrashed(data));
+  } else {
+    const {data} = await sb.from('requests').select('id,category,status,deleted_at').eq('recipient_id',uid);
+    catReqsAll = onlyActiveRequests(excludeTrashed(data));
+  }
+  const catNavTarget = role==='mahasiswa' ? 'request-chat' : 'semua-request';
 
   const greet = () => {
     const h = new Date().getHours();
@@ -1264,6 +1474,12 @@ async function renderDashHome(body) {
     </div>
     <div class="stats-grid">${statsHtml}</div>
     <div class="section-header">
+      <h2>Request Berdasarkan Kategori</h2>
+      <button class="btn btn-ghost btn-sm" onclick="navTo('${catNavTarget}')">Lihat Semua Kategori</button>
+    </div>
+    ${categorySummaryLine()}
+    <div style="margin-bottom:2rem">${topCategoryCards(catReqsAll, catNavTarget, 6)}</div>
+    <div class="section-header">
       <h2>Request Terkini</h2>
       <button class="btn btn-ghost btn-sm" onclick="navTo('${role==='mahasiswa'?'request-chat':'semua-request'}')">Lihat Semua</button>
     </div>
@@ -1290,10 +1506,17 @@ function sortRequests(reqs) {
 }
 
 function requestCard(r, role) {
-  const isMine = role==='mahasiswa' && r.sender_id===currentUser.id;
+  const isMine = r.sender_id===currentUser.id;
   const other = isMine ? r.recipient : r.sender;
   const otherName = other?.full_name || r.recipient_manual || (r.recipient_type==='admin'?'Admin/Civitas':'—');
   const extraInfo = other ? formatIdentity(other) : '';
+  const canEdit = isMine && r.status!=='selesai' && r.status!=='dibatalkan';
+  const canManage = canUpdateStatus(r);
+  const statusHtml = canManage
+    ? `<select class="form-input form-select" style="padding:.2rem .5rem;font-size:.72rem;width:auto;border-radius:99px" onclick="event.stopPropagation()" onchange="event.stopPropagation();updateStatus('${r.id}',this.value)" title="Anda penerima request ini — atur status">
+        ${['belum_diproses','menunggu_diproses','sedang_diproses','menunggu_data_tambahan','menunggu_pihak_lain','selesai','terlambat'].map(s=>`<option value="${s}"${r.status===s?' selected':''}>${statusLabel(s)}</option>`).join('')}
+      </select>`
+    : `<span class="status-badge status-${r.status}">${statusLabel(r.status)}</span>`;
   return `<div class="request-card ${r.priority||'normal'}" onclick="openChat('${r.id}')">
     <div class="request-card-header">
       <div style="flex:1;min-width:0">
@@ -1301,11 +1524,15 @@ function requestCard(r, role) {
         <h4 style="font-size:.95rem;font-weight:700;margin-top:.2rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.subject}</h4>
         <div style="font-size:.8rem;color:var(--text-gray);margin-top:.2rem">${isMine?'Kepada':'Dari'}: ${otherName}${extraInfo?` · ${extraInfo}`:''}</div>
       </div>
+      ${canEdit?`<div style="display:flex;flex-direction:column;gap:.25rem;flex-shrink:0" onclick="event.stopPropagation()">
+        <button class="btn btn-ghost btn-sm" onclick="showEditRequestModal(${JSON.stringify(r).replace(/"/g,'&quot;')})" title="Edit Request">✏️</button>
+        <button class="btn btn-danger btn-sm" onclick="cancelRequest('${r.id}')" title="Batalkan Request">🗑️</button>
+      </div>`:''}
     </div>
     <p style="font-size:.8rem;color:var(--text-gray);line-height:1.5;margin-bottom:.75rem;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${r.description}</p>
     <div class="request-card-meta">
-      <span class="status-badge ${r.priority==='urgent'?'priority-urgent':r.priority==='low'?'priority-low':'priority-normal'}">${r.priority==='urgent'?'🔴 Urgent':r.priority==='low'?'Low':'Normal'}</span>
-      <span class="status-badge status-${r.status}">${statusLabel(r.status)}</span>
+      ${priorityBadgeHtml(r)}
+      ${statusHtml}
       <span style="font-size:.75rem;color:var(--text-gray);margin-left:auto">📅 ${fmt(r.due_date)}</span>
     </div>
   </div>`;
@@ -1317,6 +1544,56 @@ function formatIdentity(p) {
   if(p.role==='dosen') return [p.nidn,p.fakultas].filter(Boolean).join(' · ');
   return p.fakultas||'';
 }
+
+// ============================================================
+// KATEGORI REQUEST — helper bersama
+// ============================================================
+const REQUEST_CATEGORIES = ['Bimbingan Akademik','Skripsi/Tugas Akhir','Administrasi Akademik','Perizinan','Jadwal Perkuliahan','Tugas/Perkuliahan','Surat Menyurat','Kendala LMS/SIAKAD','Pembayaran/UKT','Informasi Kampus','Lainnya'];
+
+function categoryCounts(reqs) {
+  const counts = {};
+  (reqs||[]).forEach(r=>{ const c = r.category||'Lainnya'; counts[c]=(counts[c]||0)+1; });
+  return counts;
+}
+
+function categoryChipsHtml(reqs, activeCat, onClickFn) {
+  const counts = categoryCounts(reqs);
+  const total = (reqs||[]).length;
+  const chips = [{key:'',label:'Semua',count:total}].concat(REQUEST_CATEGORIES.map(c=>({key:c,label:c,count:counts[c]||0})));
+  return `<div class="cat-chip-row" style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem">
+    ${chips.map(c=>{
+      const active = activeCat===c.key;
+      return `<button type="button" class="cat-chip" onclick="${onClickFn}('${c.key.replace(/'/g,"\\'")}')" style="padding:.4rem .85rem;border-radius:999px;border:1px solid ${active?'var(--blue)':'var(--border)'};background:${active?'var(--blue)':'var(--white)'};color:${active?'#fff':'var(--text)'};font-size:.78rem;font-weight:600;cursor:pointer;white-space:nowrap;transition:all .12s">${c.label} <span style="opacity:.8">(${c.count})</span></button>`;
+    }).join('')}
+  </div>`;
+}
+
+function categorySummaryLine() {
+  return `<p style="font-size:.8rem;color:var(--text-gray);margin-bottom:1rem">Request dikelompokkan berdasarkan kategori agar komunikasi akademik lebih terstruktur dan mudah dipantau — bukan tercampur seperti chat WA/email biasa.</p>`;
+}
+
+function filterByCategory(reqs, cat) {
+  if(!cat) return reqs;
+  return (reqs||[]).filter(r=>(r.category||'Lainnya')===cat);
+}
+
+function topCategoryCards(reqs, navTarget, max) {
+  const counts = categoryCounts(reqs);
+  const entries = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,max||6);
+  if(entries.length===0) return '<div class="empty-state"><div class="empty-icon">📁</div><p>Belum ada request untuk dikelompokkan.</p></div>';
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.75rem">
+    ${entries.map(([cat,count])=>`
+      <div onclick="openCategoryFrom('${navTarget}','${cat.replace(/'/g,"\\'")}')" style="background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:1rem;cursor:pointer;transition:box-shadow .15s" onmouseover="this.style.boxShadow='var(--shadow-md)'" onmouseout="this.style.boxShadow=''">
+        <div style="font-size:.8rem;color:var(--text-gray);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cat}</div>
+        <div style="font-size:1.4rem;font-weight:800;color:var(--blue);margin-top:.25rem">${count}</div>
+      </div>`).join('')}
+  </div>`;
+}
+
+window.openCategoryFrom = function(navTarget, cat) {
+  presetCategory = cat;
+  navTo(navTarget);
+};
 
 // ============================================================
 // REQUEST CHAT — KIRIM REQUEST BARU (MAHASISWA)
@@ -1333,10 +1610,48 @@ async function renderRequestChat(body) {
         <h3 style="font-weight:700;margin-bottom:1rem">Request Terkirim</h3>
         <div id="my-requests-list"><div class="spinner" style="margin:2rem auto"></div></div>
       </div>
-    </div>`;
+    </div>
+    <div class="section-header" style="margin-top:2rem"><h2>Kategori Request</h2></div>
+    <div id="mhs-cat-wrap"><div class="spinner" style="margin:2rem auto"></div></div>`;
   loadMyRequests('my-requests-list', 'sent');
   attachRequestFormListeners('mhs');
+  loadCategoryRequestsMhs();
 }
+
+async function loadCategoryRequestsMhs() {
+  const wrap = $('mhs-cat-wrap');
+  if(!wrap||!currentUser) return;
+  const uid = currentUser.id;
+  const [sentQ,inboxQ] = await Promise.all([
+    sb.from('requests').select('*,recipient:profiles!requests_recipient_id_fkey(full_name,role,nim,nidn,fakultas)').eq('sender_id',uid),
+    sb.from('requests').select('*,sender:profiles!requests_sender_id_fkey(full_name,role,nim,nidn,fakultas,program_studi)').eq('recipient_id',uid)
+  ]);
+  if(sentQ.error||inboxQ.error) {
+    wrap.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><p>${getErrorMessage(sentQ.error||inboxQ.error)}</p></div>`;
+    return;
+  }
+  window._mhsCatReqs = onlyActiveRequests(excludeTrashed([...(sentQ.data||[]),...(inboxQ.data||[])]));
+  if(presetCategory) { catFilterMhs = presetCategory; presetCategory = null; }
+  renderCategoryReqMhsUI();
+}
+
+function renderCategoryReqMhsUI() {
+  const wrap = $('mhs-cat-wrap');
+  if(!wrap) return;
+  const reqs = window._mhsCatReqs||[];
+  const filtered = sortRequests(filterByCategory(reqs, catFilterMhs));
+  wrap.innerHTML = `
+    ${categorySummaryLine()}
+    ${categoryChipsHtml(reqs, catFilterMhs, 'setCatFilterMhs')}
+    <div id="mhs-cat-list">
+      ${filtered.length===0?'<div class="empty-state"><div class="empty-icon">🔍</div><p>Belum ada request pada kategori ini.</p></div>':filtered.map(r=>requestCard(r,'mahasiswa')).join('')}
+    </div>`;
+}
+
+window.setCatFilterMhs = function(cat) {
+  catFilterMhs = cat;
+  renderCategoryReqMhsUI();
+};
 
 async function renderKirimPesan(body) {
   const role = currentProfile?.role;
@@ -1510,7 +1825,7 @@ window.submitRequest = async function(e, ctx) {
     showToast('Request berhasil dikirim!','success');
     openChat(req.id);
   } catch(err) {
-    if(errEl){errEl.classList.remove('hidden');errEl.textContent=err.message;}
+    if(errEl){errEl.classList.remove('hidden');errEl.textContent=getErrorMessage(err);}
     btn.disabled=false; btn.textContent='Kirim Request';
   }
 };
@@ -1531,8 +1846,10 @@ async function loadMyRequests(containerId, type) {
   if(type==='sent') q = sb.from('requests').select('*,recipient:profiles!requests_recipient_id_fkey(full_name,role,nim,nidn,fakultas)').eq('sender_id',uid).order('created_at',{ascending:false});
   else q = sb.from('requests').select('*,sender:profiles!requests_sender_id_fkey(full_name,role,nim,nidn,fakultas,program_studi)').eq('recipient_id',uid).order('created_at',{ascending:false});
   const {data,error} = await q;
-  if(error||!data||data.length===0) { el.innerHTML='<div class="empty-state"><div class="empty-icon">📭</div><p>Tidak ada request.</p></div>'; return; }
-  el.innerHTML = sortRequests(data).map(r=>requestCard(r,currentProfile.role)).join('');
+  if(error) { el.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><p>${getErrorMessage(error)}</p></div>`; return; }
+  const active = onlyActiveRequests(excludeTrashed(data));
+  if(active.length===0) { el.innerHTML='<div class="empty-state"><div class="empty-icon">📭</div><p>Tidak ada request.</p></div>'; return; }
+  el.innerHTML = sortRequests(active).map(r=>requestCard(r,currentProfile.role)).join('');
 }
 
 // ============================================================
@@ -1543,45 +1860,80 @@ async function renderSemuaRequest(body) {
   const uid = currentUser.id;
   let q;
   if(role==='admin') {
-    q = sb.from('requests').select('*,sender:profiles!requests_sender_id_fkey(full_name,role,nim,nidn,fakultas,program_studi)').eq('recipient_type','admin').order('created_at',{ascending:false});
+    q = applyAdminRequestFilter(sb.from('requests').select('*,sender:profiles!requests_sender_id_fkey(full_name,role,nim,nidn,fakultas,program_studi),recipient:profiles!requests_recipient_id_fkey(full_name,role,nim,nidn,fakultas,program_studi)'), uid).order('created_at',{ascending:false});
   } else {
     q = sb.from('requests').select('*,sender:profiles!requests_sender_id_fkey(full_name,role,nim,nidn,fakultas,program_studi)').eq('recipient_id',uid).order('created_at',{ascending:false});
   }
-  const {data} = await q;
-  const reqs = sortRequests(data||[]);
+  const {data,error} = await q;
+  if(error) {
+    window._allReqs = [];
+    body.innerHTML = `<div class="section-header"><h2>Semua Request</h2></div><div class="empty-state"><div class="empty-icon">⚠️</div><p>${getErrorMessage(error)}</p></div>`;
+    return;
+  }
+  const reqs = sortRequests(onlyActiveRequests(excludeTrashed(data)));
+  window._allReqs = reqs;
+  if(presetCategory) { catFilterSemua = presetCategory; presetCategory = null; }
+  statusFilterSemua = ''; priorityFilterSemua = '';
   body.innerHTML = `
-    <div class="section-header">
-      <h2>Semua Request</h2>
-      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-        <select class="form-input form-select" id="filter-status" onchange="filterRequests()" style="width:auto;padding:.4rem .75rem;font-size:.85rem">
-          <option value="">Semua Status</option>
-          ${['belum_diproses','menunggu_diproses','sedang_diproses','menunggu_data_tambahan','menunggu_pihak_lain','terlambat','selesai'].map(s=>`<option value="${s}">${statusLabel(s)}</option>`).join('')}
-        </select>
-        <select class="form-input form-select" id="filter-priority" onchange="filterRequests()" style="width:auto;padding:.4rem .75rem;font-size:.85rem">
-          <option value="">Semua Prioritas</option>
-          <option value="urgent">Urgent</option>
-          <option value="normal">Normal</option>
-          <option value="low">Low</option>
-        </select>
-      </div>
+    <div class="section-header"><h2>Semua Request</h2></div>
+    <div id="semua-req-wrap"></div>`;
+  renderSemuaReqUI();
+};
+
+function renderSemuaReqUI() {
+  const wrap = $('semua-req-wrap');
+  if(!wrap) return;
+  const role = currentProfile.role;
+  const reqs = window._allReqs||[];
+  let filtered = filterByCategory(reqs, catFilterSemua);
+  if(statusFilterSemua) filtered = filtered.filter(r=>r.status===statusFilterSemua);
+  if(priorityFilterSemua) filtered = filtered.filter(r=>r.priority===priorityFilterSemua);
+  wrap.innerHTML = `
+    ${categorySummaryLine()}
+    ${categoryChipsHtml(reqs, catFilterSemua, 'setCatFilterSemua')}
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1.25rem">
+      <select class="form-input form-select" id="filter-status" onchange="updateSemuaFilters()" style="width:auto;padding:.4rem .75rem;font-size:.85rem">
+        <option value="">Semua Status</option>
+        ${ACTIVE_REQUEST_STATUSES.map(s=>`<option value="${s}"${statusFilterSemua===s?' selected':''}>${statusLabel(s)}</option>`).join('')}
+      </select>
+      <select class="form-input form-select" id="filter-priority" onchange="updateSemuaFilters()" style="width:auto;padding:.4rem .75rem;font-size:.85rem">
+        <option value="">Semua Prioritas</option>
+        <option value="urgent"${priorityFilterSemua==='urgent'?' selected':''}>Urgent</option>
+        <option value="normal"${priorityFilterSemua==='normal'?' selected':''}>Normal</option>
+        <option value="low"${priorityFilterSemua==='low'?' selected':''}>Low</option>
+      </select>
     </div>
     <div id="all-req-list">
-      ${reqs.length===0?'<div class="empty-state"><div class="empty-icon">📭</div><p>Belum ada request masuk.</p></div>':reqs.map(r=>requestCardWithActions(r,role)).join('')}
+      ${filtered.length===0?'<div class="empty-state"><div class="empty-icon">🔍</div><p>Tidak ada request yang sesuai filter.</p></div>':filtered.map(r=>requestCardWithActions(r,role)).join('')}
     </div>`;
-  window._allReqs = reqs;
+}
+
+window.setCatFilterSemua = function(cat) {
+  catFilterSemua = cat;
+  renderSemuaReqUI();
+};
+
+window.updateSemuaFilters = function() {
+  statusFilterSemua = $('filter-status')?.value || '';
+  priorityFilterSemua = $('filter-priority')?.value || '';
+  renderSemuaReqUI();
 };
 
 function requestCardWithActions(r, role) {
-  const other = r.sender || {};
+  const isMine = r.sender_id===currentUser.id;
+  const other = (isMine ? r.recipient : r.sender) || {};
+  const otherLabel = isMine ? 'Kepada' : 'Dari';
+  const otherName = other.full_name || r.recipient_manual || (isMine && r.recipient_type==='admin' ? 'Admin/Civitas' : '—');
+  const canManage = canUpdateStatus(r);
   const card = `<div class="request-card ${r.priority||'normal'}" style="margin-bottom:.75rem">
     <div class="request-card-header">
       <div style="flex:1;min-width:0">
         <div style="font-size:.75rem;color:var(--text-gray);font-weight:600">${r.request_code||'—'}</div>
         <h4 style="font-size:.95rem;font-weight:700;margin-top:.2rem">${r.subject}</h4>
-        <div style="font-size:.8rem;color:var(--text-gray);margin-top:.2rem">Dari: ${other.full_name||'—'} · ${formatIdentity(other)||other.role||'—'}</div>
+        <div style="font-size:.8rem;color:var(--text-gray);margin-top:.2rem">${otherLabel}: ${otherName}${other.full_name?` · ${formatIdentity(other)||other.role||''}`:''}</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:.375rem;flex-shrink:0">
-        <span class="status-badge ${r.priority==='urgent'?'priority-urgent':r.priority==='low'?'priority-low':'priority-normal'}">${r.priority==='urgent'?'🔴 Urgent':r.priority==='low'?'Low':'Normal'}</span>
+        ${priorityBadgeHtml(r)}
         <span class="status-badge status-${r.status}">${statusLabel(r.status)}</span>
       </div>
     </div>
@@ -1589,10 +1941,10 @@ function requestCardWithActions(r, role) {
     <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;margin-top:.75rem">
       <span style="font-size:.75rem;color:var(--text-gray)">📅 ${fmt(r.due_date)}</span>
       <span style="font-size:.75rem;color:var(--text-gray)">📁 ${r.category}</span>
-      <div style="margin-left:auto;display:flex;gap:.5rem;flex-wrap:wrap">
-        <select class="form-input form-select" style="padding:.3rem .6rem;font-size:.78rem;width:auto" onchange="updateStatus('${r.id}',this.value)">
+      <div style="margin-left:auto;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+        ${canManage?`<select class="form-input form-select" style="padding:.3rem .6rem;font-size:.78rem;width:auto" onchange="updateStatus('${r.id}',this.value)">
           ${['belum_diproses','menunggu_diproses','sedang_diproses','menunggu_data_tambahan','menunggu_pihak_lain','selesai','terlambat'].map(s=>`<option value="${s}"${r.status===s?' selected':''}>${statusLabel(s)}</option>`).join('')}
-        </select>
+        </select>`:''}
         <button class="btn btn-primary btn-sm" onclick="openChat('${r.id}')">💬 Chat</button>
       </div>
     </div>
@@ -1600,21 +1952,70 @@ function requestCardWithActions(r, role) {
   return card;
 }
 
-window.filterRequests = function() {
-  const status = $('filter-status')?.value;
-  const priority = $('filter-priority')?.value;
-  const role = currentProfile.role;
-  let reqs = window._allReqs||[];
-  if(status) reqs = reqs.filter(r=>r.status===status);
-  if(priority) reqs = reqs.filter(r=>r.priority===priority);
-  const listEl = $('all-req-list');
-  if(listEl) listEl.innerHTML = reqs.length===0?'<div class="empty-state"><div class="empty-icon">🔍</div><p>Tidak ada request yang sesuai filter.</p></div>':reqs.map(r=>requestCardWithActions(r,role)).join('');
+// ============================================================
+// EDIT / CANCEL REQUEST
+// ============================================================
+window.showEditRequestModal = function(r) {
+  if(!$('er-id')) return;
+  $('er-id').value = r.id;
+  $('er-cat').value = r.category || '';
+  if(r.category === 'Lainnya') {
+    $('er-cat-other-group').classList.remove('hidden');
+    $('er-cat-other').value = r.category_other || '';
+  } else {
+    $('er-cat-other-group').classList.add('hidden');
+  }
+  $('er-subject').value = r.subject || '';
+  $('er-desc').value = r.description || '';
+  if(r.due_date) $('er-due').value = new Date(r.due_date).toISOString().slice(0,16);
+  if($('er-error')) $('er-error').classList.add('hidden');
+  $('edit-request-modal').classList.remove('hidden');
+};
+
+window.saveEditRequest = async function(e) {
+  e.preventDefault();
+  const id = $('er-id').value;
+  const btn = $('er-btn'); const errEl = $('er-error');
+  const cat = $('er-cat').value;
+  const catOther = cat === 'Lainnya' ? $('er-cat-other').value.trim() : null;
+  const subject = $('er-subject').value.trim();
+  const desc = $('er-desc').value.trim();
+  const due = $('er-due').value;
+  if(!subject||!desc||!due){if(errEl){errEl.classList.remove('hidden');errEl.textContent='Lengkapi semua field.';}return;}
+  if(cat==='Lainnya'&&!catOther){if(errEl){errEl.classList.remove('hidden');errEl.textContent='Isi kategori lainnya.';}return;}
+  btn.disabled=true; btn.textContent='Menyimpan...';
+  if(errEl) errEl.classList.add('hidden');
+  const {error} = await sb.from('requests').update({
+    category:cat, category_other:catOther||null,
+    subject, description:desc, due_date:new Date(due).toISOString()
+  }).eq('id',id).eq('sender_id',currentUser.id);
+  btn.disabled=false; btn.textContent='Simpan Perubahan';
+  if(error){if(errEl){errEl.classList.remove('hidden');errEl.textContent=getErrorMessage(error);}return;}
+  $('edit-request-modal').classList.add('hidden');
+  showToast('Request berhasil diperbarui!','success');
+  loadDashPage(currentDashPage);
+};
+
+window.cancelRequest = async function(id) {
+  if(!confirm('Batalkan request ini? Request yang dibatalkan tidak dapat dikembalikan.')) return;
+  const {error} = await sb.from('requests').update({status:'dibatalkan'}).eq('id',id).eq('sender_id',currentUser.id);
+  if(error){showToast('Gagal membatalkan: '+getErrorMessage(error),'error');return;}
+  showToast('Request dibatalkan.','success');
+  loadDashPage(currentDashPage);
 };
 
 window.updateStatus = async function(id, status) {
-  const {error} = await sb.from('requests').update({status}).eq('id',id);
-  if(error) showToast('Gagal update status: '+error.message,'error');
-  else showToast('Status diperbarui!','success');
+  const payload = {status};
+  if(status === 'selesai') payload.completed_at = new Date().toISOString();
+  if(ACTIVE_REQUEST_STATUSES.includes(status)) {
+    payload.reopened_at = null;
+    if(status !== 'selesai') payload.completed_at = null;
+  }
+  const {error} = await sb.from('requests').update(payload).eq('id',id);
+  if(error) { showToast('Gagal update status: '+getErrorMessage(error),'error'); return; }
+  showToast('Status diperbarui!','success');
+  if(openRequestId===id && status !== 'selesai') openChat(id);
+  else loadDashPage(status==='selesai' ? 'riwayat' : currentDashPage);
 };
 
 // ============================================================
@@ -1625,38 +2026,66 @@ window.openChat = async function(requestId) {
   const body = $('dashboard-body');
   if(!body) return;
   body.innerHTML = `<div class="loading-overlay"><div class="spinner"></div><p class="loading-text">Membuka chat...</p></div>`;
-  const {data:req} = await sb.from('requests').select('*,sender:profiles!requests_sender_id_fkey(id,full_name,role,nim,nidn,fakultas,program_studi),recipient:profiles!requests_recipient_id_fkey(id,full_name,role,nim,nidn,fakultas,program_studi)').eq('id',requestId).single();
-  if(!req) { body.innerHTML='<div class="empty-state"><div class="empty-icon">⚠️</div><p>Request tidak ditemukan.</p></div>'; return; }
-  const {data:msgs} = await sb.from('request_messages').select('*').eq('request_id',requestId).order('created_at',{ascending:true});
+  const {data:req, error:reqErr} = await sb.from('requests').select('*,sender:profiles!requests_sender_id_fkey(id,full_name,role,nim,nidn,fakultas,program_studi),recipient:profiles!requests_recipient_id_fkey(id,full_name,role,nim,nidn,fakultas,program_studi)').eq('id',requestId).single();
+  if(!req) { body.innerHTML=`<div class="empty-state"><div class="empty-icon">⚠️</div><p>${reqErr?getErrorMessage(reqErr):'Request tidak ditemukan.'}</p></div>`; return; }
+  const {data:msgs, error:msgsErr} = await sb.from('request_messages').select('*').eq('request_id',requestId).order('created_at',{ascending:true});
+  if(msgsErr) showToast('Gagal memuat pesan: '+getErrorMessage(msgsErr),'error');
   const {data:attachments} = await sb.from('request_attachments').select('*').eq('request_id',requestId);
   await sb.from('request_messages').update({is_read:true,read_at:new Date().toISOString()}).eq('request_id',requestId).neq('sender_id',currentUser.id);
+  window._chatMsgMap = {};
+  (msgs||[]).forEach(m=>{ window._chatMsgMap[m.id] = m; });
+  window._chatAttachments = attachments||[];
+  chatSearchMatches = []; chatSearchIndex = -1;
   const other = req.sender_id===currentUser.id ? req.recipient : req.sender;
   const otherName = other?.full_name || (req.recipient_type==='admin'?'Admin/Civitas':'—');
+  const senderName = req.sender?.full_name || '—';
+  const recipientName = req.recipient?.full_name || (req.recipient_type==='admin'?'Admin/Civitas':'—');
+  const initialAttachments = (attachments||[]).filter(a=>!a.message_id);
+  const canManageStatus = canUpdateStatus(req);
   body.innerHTML = `
     <div class="section-header">
       <div style="display:flex;align-items:center;gap:.75rem">
         <button class="btn btn-ghost btn-sm" onclick="goBack()">← Kembali</button>
         <div>
-          <h2 style="font-size:1.1rem">${req.subject}</h2>
+          <h2 style="font-size:1.1rem" id="detail-req-subject">${escapeHtml(req.subject)}</h2>
           <div style="font-size:.8rem;color:var(--text-gray)">${req.request_code} · ${otherName} · <span class="status-badge status-${req.status}" style="font-size:.72rem">${statusLabel(req.status)}</span></div>
         </div>
       </div>
-      ${currentProfile.role!=='mahasiswa'?`<select class="form-input form-select" style="width:auto;padding:.4rem .75rem;font-size:.85rem" onchange="updateStatus('${req.id}',this.value)">
+      ${canManageStatus?`<select class="form-input form-select" style="width:auto;padding:.4rem .75rem;font-size:.85rem" onchange="updateStatus('${req.id}',this.value)" title="Anda penerima request ini — atur status">
         ${['belum_diproses','menunggu_diproses','sedang_diproses','menunggu_data_tambahan','menunggu_pihak_lain','selesai','terlambat'].map(s=>`<option value="${s}"${req.status===s?' selected':''}>${statusLabel(s)}</option>`).join('')}
       </select>`:''}
     </div>
-    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--r-lg);padding:1.25rem;margin-bottom:1.25rem;font-size:.85rem">
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.625rem;color:var(--text-gray)">
-        <div><strong>Kategori</strong><br>${req.category}${req.category_other?' — '+req.category_other:''}</div>
-        <div><strong>Pengirim</strong><br>${req.sender?.full_name||'—'}</div>
-        <div><strong>Penerima</strong><br>${otherName}</div>
-        <div><strong>Tenggat</strong><br>${fmtDt(req.due_date)}</div>
-        <div><strong>Prioritas</strong><br><span class="badge ${req.priority==='urgent'?'badge-red':req.priority==='low'?'badge-gray':'badge-blue'}">${req.priority||'normal'}</span></div>
-        <div><strong>Status</strong><br><span class="status-badge status-${req.status}">${statusLabel(req.status)}</span></div>
+    <div class="card" style="background:var(--white);border:1px solid var(--border);border-radius:var(--r-lg);padding:1.25rem;margin-bottom:1.25rem;font-size:.85rem">
+      <h3 style="font-size:.95rem;font-weight:700;margin-bottom:.875rem">📋 Detail Request</h3>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.75rem 1rem;color:var(--text-gray);margin-bottom:1rem">
+        <div><strong style="color:var(--text)">Kode Request</strong><br>${req.request_code||'—'}</div>
+        <div><strong style="color:var(--text)">Kategori</strong><br>${req.category}${req.category_other?' — '+req.category_other:''}</div>
+        <div><strong style="color:var(--text)">Status</strong><br><span class="status-badge status-${req.status}">${statusLabel(req.status)}</span></div>
+        ${isActiveRequest(req)?`<div><strong style="color:var(--text)">Prioritas</strong><br><span class="badge ${req.priority==='urgent'?'badge-red':req.priority==='low'?'badge-gray':'badge-blue'}">${req.priority||'normal'}</span></div>`:''}
+        <div><strong style="color:var(--text)">Tenggat Waktu</strong><br>${fmtDt(req.due_date)}</div>
+        <div><strong style="color:var(--text)">Pengirim</strong><br>${senderName}</div>
+        <div><strong style="color:var(--text)">Penerima</strong><br>${recipientName}</div>
       </div>
+      <div style="border-top:1px solid var(--border);padding-top:.875rem">
+        <strong style="color:var(--text);font-size:.85rem">Deskripsi / Pesan Request</strong>
+        <p id="detail-req-desc" style="margin-top:.375rem;color:var(--text);line-height:1.6;white-space:pre-wrap;word-break:break-word">${escapeHtml(req.description)||'—'}</p>
+      </div>
+      ${initialAttachments.length>0?`<div style="border-top:1px solid var(--border);padding-top:.875rem;margin-top:.875rem">
+        <strong style="color:var(--text);font-size:.85rem">Lampiran Awal</strong>
+        <div style="margin-top:.5rem;display:flex;flex-direction:column;gap:.375rem">
+          ${initialAttachments.map(a=>`<a href="${a.file_url}" target="_blank" style="font-size:.8rem;color:var(--blue);text-decoration:underline">📎 ${escapeHtml(a.file_name)}</a>`).join('')}
+        </div>
+      </div>`:''}
     </div>
     <div class="chat-main" style="border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;display:flex;flex-direction:column;height:480px;background:var(--white)">
-      <div id="chat-messages" class="chat-messages">${(msgs||[]).map(m=>msgBubble(m,attachments||[])).join('')}</div>
+      <div class="chat-search-bar" style="display:flex;align-items:center;gap:.4rem;padding:.5rem .75rem;border-bottom:1px solid var(--border);background:var(--bg);flex-shrink:0">
+        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color:var(--text-gray);flex-shrink:0"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+        <input type="text" id="chat-search-input" placeholder="Cari pesan di chat ini..." style="flex:1;border:1px solid var(--border);border-radius:99px;padding:.3rem .75rem;font-size:.78rem;outline:none;background:var(--white)" oninput="onChatSearchInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();chatSearchNav(1)}"/>
+        <span id="chat-search-count" style="font-size:.7rem;color:var(--text-gray);white-space:nowrap;min-width:70px;text-align:right"></span>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="chatSearchNav(-1)" title="Hasil sebelumnya" style="padding:.2rem .5rem">↑</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="chatSearchNav(1)" title="Hasil berikutnya" style="padding:.2rem .5rem">↓</button>
+      </div>
+      <div id="chat-messages" class="chat-messages">${renderChatMessages()}</div>
       <div class="chat-input-area">
         <textarea class="chat-input" id="chat-input" placeholder="Tulis pesan..." rows="1" onkeydown="onChatKey(event,'${req.id}')"></textarea>
         <label class="btn btn-ghost btn-sm" for="chat-file-input" title="Lampirkan file">📎</label>
@@ -1665,6 +2094,7 @@ window.openChat = async function(requestId) {
       </div>
     </div>`;
   const msgsEl = $('chat-messages');
+  bindChatMessageActions();
   if(msgsEl) msgsEl.scrollTop = msgsEl.scrollHeight;
   if(chatRealtime) { sb.removeChannel(chatRealtime); chatRealtime=null; }
   chatRealtime = sb.channel('chat-'+requestId)
@@ -1672,9 +2102,48 @@ window.openChat = async function(requestId) {
       const m = payload.new;
       if(!m||m.sender_id===currentUser.id) return;
       await sb.from('request_messages').update({is_read:true,read_at:new Date().toISOString()}).eq('id',m.id);
+      window._chatMsgMap[m.id] = m;
       const msgsEl2 = $('chat-messages');
-      if(msgsEl2) { msgsEl2.innerHTML += msgBubble(m,[]); msgsEl2.scrollTop=msgsEl2.scrollHeight; }
+      if(msgsEl2) { msgsEl2.innerHTML += msgBubble(m,window._chatAttachments||[]); msgsEl2.scrollTop=msgsEl2.scrollHeight; }
+    })
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'request_messages',filter:`request_id=eq.${requestId}`}, payload => {
+      const m = payload.new;
+      if(!m) return;
+      window._chatMsgMap[m.id] = m;
+      const msgsEl3 = $('chat-messages');
+      if(msgsEl3) { msgsEl3.innerHTML = renderChatMessages(); bindChatMessageActions(); }
     }).subscribe();
+};
+
+function renderChatMessages() {
+  return Object.values(window._chatMsgMap||{}).map(m=>msgBubble(m,window._chatAttachments||[])).join('');
+}
+
+window.onChatSearchInput = function() {
+  const inp = $('chat-search-input');
+  const term = (inp?.value||'').trim().toLowerCase();
+  qsa('.msg-wrap.search-match').forEach(elx=>elx.classList.remove('search-match'));
+  const detailSubject = $('detail-req-subject');
+  const detailDesc = $('detail-req-desc');
+  if(detailSubject) detailSubject.classList.remove('search-match-text');
+  if(detailDesc) detailDesc.classList.remove('search-match-text');
+  chatSearchMatches = []; chatSearchIndex = -1;
+  const countEl = $('chat-search-count');
+  if(!term) { if(countEl) countEl.textContent=''; return; }
+  if(detailSubject && detailSubject.textContent.toLowerCase().includes(term)) { detailSubject.classList.add('search-match-text'); chatSearchMatches.push(detailSubject); }
+  if(detailDesc && detailDesc.textContent.toLowerCase().includes(term)) { detailDesc.classList.add('search-match-text'); chatSearchMatches.push(detailDesc); }
+  qsa('#chat-messages .msg-wrap').forEach(elx=>{
+    if(elx.textContent.toLowerCase().includes(term)) { elx.classList.add('search-match'); chatSearchMatches.push(elx); }
+  });
+  if(countEl) countEl.textContent = chatSearchMatches.length===0 ? 'Tidak ada pesan yang cocok' : `${chatSearchMatches.length} hasil`;
+  if(chatSearchMatches.length>0) { chatSearchIndex=0; chatSearchMatches[0].scrollIntoView({block:'center',behavior:'smooth'}); }
+};
+window.chatSearchNav = function(dir) {
+  if(chatSearchMatches.length===0) return;
+  chatSearchIndex = (chatSearchIndex + dir + chatSearchMatches.length) % chatSearchMatches.length;
+  chatSearchMatches[chatSearchIndex].scrollIntoView({block:'center',behavior:'smooth'});
+  const countEl = $('chat-search-count');
+  if(countEl) countEl.textContent = `${chatSearchIndex+1}/${chatSearchMatches.length} hasil`;
 };
 
 window.goBack = function() {
@@ -1682,16 +2151,52 @@ window.goBack = function() {
   openRequestId=null; loadDashPage(currentDashPage);
 };
 
+function hasLaterHumanReply(message) {
+  if(!message || !message.created_at) return false;
+  const created = new Date(message.created_at).getTime();
+  return Object.values(window._chatMsgMap || {}).some(other => {
+    if(!other || other.id === message.id) return false;
+    if(other.is_deleted) return false;
+    if(other.sender_type === 'ai_bot') return false;
+    if(other.sender_id === message.sender_id) return false;
+    return new Date(other.created_at).getTime() > created;
+  });
+}
+
+function chatEditLockedReason(message) {
+  if(!message) return 'Pesan tidak ditemukan.';
+  if(message.sender_id !== currentUser.id) return 'Anda hanya bisa mengubah pesan sendiri.';
+  if(message.is_deleted) return 'Pesan yang sudah dihapus tidak bisa diubah.';
+  if(hasLaterHumanReply(message)) return 'Pesan tidak bisa diedit/hapus karena sudah direspons oleh penerima.';
+  return '';
+}
+
 function msgBubble(m, attachments) {
   const isMe = m.sender_id===currentUser.id;
   const isBot = m.sender_type==='ai_bot';
   const cls = isBot?'bot':isMe?'mine':'theirs';
   const time = fmtTime(m.created_at);
-  const attHtml = attachments.filter(a=>a.message_id===m.id).map(a=>`<a href="${a.file_url}" target="_blank" style="display:block;font-size:.78rem;color:var(--blue);text-decoration:underline;margin-top:.25rem">📎 ${a.file_name}</a>`).join('');
-  return `<div class="msg-wrap ${cls}">
+  const safeMessage = escapeHtml(m.message || '');
+  const attHtml = attachments.filter(a=>a.message_id===m.id).map(a=>`<a href="${a.file_url}" target="_blank" style="display:block;font-size:.78rem;color:var(--blue);text-decoration:underline;margin-top:.25rem">📎 ${escapeHtml(a.file_name)}</a>`).join('');
+  if(m.is_deleted){
+    return `<div class="msg-wrap ${cls}" data-message-id="${m.id}">
+      <div class="msg-bubble msg-deleted" style="opacity:.6;font-style:italic">Pesan telah dihapus</div>
+      <div class="msg-meta">${time}</div>
+    </div>`;
+  }
+  const editedBadge = m.edited_at ? `<span style="font-size:.65rem;opacity:.7"> · diedit</span>` : '';
+  const locked = isMe && !isBot && hasLaterHumanReply(m);
+  const actionsHtml = isMe && !isBot && !locked ? `<div class="msg-actions">
+    <button type="button" class="msg-action-btn" data-action="edit-message" data-message-id="${m.id}" title="Edit pesan">✏️</button>
+    <button type="button" class="msg-action-btn" data-action="delete-message" data-message-id="${m.id}" title="Hapus pesan">🗑️</button>
+  </div>` : '';
+  const lockedHtml = locked ? `<div class="msg-meta" title="Pesan sudah mendapat respons dari penerima">🔒 Tidak bisa diedit/dihapus setelah direspons</div>` : '';
+  return `<div class="msg-wrap ${cls}" data-message-id="${m.id}">
     ${isBot?`<div class="bot-label">🤖 Bot HaloKampus · Dijawab otomatis berdasarkan konfigurasi penerima.</div>`:''}
-    <div class="msg-bubble">${m.message}${attHtml}</div>
-    <div class="msg-meta">${time}${isMe&&m.is_read?' ✓✓':isMe?' ✓':''}</div>
+    <div class="msg-bubble">${safeMessage}${attHtml}</div>
+    <div class="msg-meta">${time}${isMe&&m.is_read?' ✓✓':isMe?' ✓':''}${editedBadge}</div>
+    ${lockedHtml}
+    ${actionsHtml}
   </div>`;
 }
 
@@ -1704,9 +2209,11 @@ window.sendChatMsg = async function(rid) {
   if(!inp||!inp.value.trim()) return;
   const msg = inp.value.trim(); inp.value='';
   const {data:m,error} = await sb.from('request_messages').insert({request_id:rid,sender_id:currentUser.id,message:msg}).select().single();
-  if(error){showToast('Gagal kirim pesan','error');inp.value=msg;return;}
+  if(error){showToast('Gagal kirim pesan: '+getErrorMessage(error),'error');inp.value=msg;return;}
+  await maybeReopenRequestOnNewMessage(rid);
+  window._chatMsgMap[m.id] = m;
   const msgsEl = $('chat-messages');
-  if(msgsEl){msgsEl.innerHTML+=msgBubble(m,[]);msgsEl.scrollTop=msgsEl.scrollHeight;}
+  if(msgsEl){msgsEl.innerHTML=renderChatMessages();msgsEl.scrollTop=msgsEl.scrollHeight;bindChatMessageActions();}
   triggerAIResponse(rid, msg);
 };
 
@@ -1715,6 +2222,8 @@ window.sendChatFile = async function(rid, input) {
   const f = input.files[0];
   const {data:m} = await sb.from('request_messages').insert({request_id:rid,sender_id:currentUser.id,message:`📎 ${f.name}`}).select().single();
   if(m) {
+    await maybeReopenRequestOnNewMessage(rid);
+    window._chatMsgMap[m.id] = m;
     const path = `${currentUser.id}/${rid}/${Date.now()}_${f.name}`;
     const {data:up} = await sb.storage.from('request-attachments').upload(path,f);
     if(up) {
@@ -1728,19 +2237,232 @@ window.sendChatFile = async function(rid, input) {
   input.value='';
 };
 
+
+function bindChatMessageActions() {
+  const box = $('chat-messages');
+  if(!box || box.dataset.actionsBound==='1') return;
+  box.dataset.actionsBound = '1';
+  box.addEventListener('click', async (event) => {
+    const btn = event.target.closest('[data-action]');
+    if(!btn) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const id = btn.dataset.messageId;
+    if(!id) return;
+    if(btn.dataset.action === 'edit-message') await editChatMessage(id);
+    if(btn.dataset.action === 'delete-message') await deleteChatMessage(id);
+  });
+}
+
+async function editChatMessage(id) {
+  const m = (window._chatMsgMap||{})[id];
+  const reason = chatEditLockedReason(m);
+  if(reason) { showToast(reason, 'error'); return; }
+  const next = prompt('Edit pesan:', m.message || '');
+  if(next === null) return;
+  const clean = next.trim();
+  if(!clean) { showToast('Pesan tidak boleh kosong.', 'error'); return; }
+  const {data,error} = await sb.from('request_messages')
+    .update({message:clean, edited_at:new Date().toISOString()})
+    .eq('id', id)
+    .eq('sender_id', currentUser.id)
+    .select()
+    .single();
+  if(error) { showToast('Gagal edit pesan: '+getErrorMessage(error),'error'); return; }
+  window._chatMsgMap[id] = data || {...m,message:clean,edited_at:new Date().toISOString()};
+  const msgsEl = $('chat-messages');
+  if(msgsEl){msgsEl.innerHTML=renderChatMessages();msgsEl.scrollTop=msgsEl.scrollHeight;bindChatMessageActions();}
+  showToast('Pesan diperbarui.', 'success');
+}
+
+async function deleteChatMessage(id) {
+  const m = (window._chatMsgMap||{})[id];
+  const reason = chatEditLockedReason(m);
+  if(reason) { showToast(reason, 'error'); return; }
+  if(!confirm('Hapus pesan ini? Pesan masih bisa dipulihkan dari Sampah Chat.')) return;
+  const {data,error} = await sb.from('request_messages')
+    .update({
+      is_deleted:true,
+      deleted_at:new Date().toISOString(),
+      deleted_by:currentUser.id,
+      original_message:m.original_message || m.message || '',
+      message:'Pesan telah dihapus'
+    })
+    .eq('id', id)
+    .eq('sender_id', currentUser.id)
+    .select()
+    .single();
+  if(error) { showToast('Gagal hapus pesan: '+getErrorMessage(error),'error'); return; }
+  window._chatMsgMap[id] = data || {...m,is_deleted:true,deleted_at:new Date().toISOString(),deleted_by:currentUser.id,original_message:m.message,message:'Pesan telah dihapus'};
+  const msgsEl = $('chat-messages');
+  if(msgsEl){msgsEl.innerHTML=renderChatMessages();msgsEl.scrollTop=msgsEl.scrollHeight;bindChatMessageActions();}
+  showToast('Pesan masuk Sampah Chat.', 'success');
+}
+
+window.editChatMessage = editChatMessage;
+window.deleteChatMessage = deleteChatMessage;
+// kompatibel dengan tombol lama kalau masih tersisa
+window.editChatMsg = (id) => editChatMessage(id);
+window.deleteChatMsg = (id) => deleteChatMessage(id);
+
+const UNANSWERED_ANALYSIS_THRESHOLD = 7;
+
+const AI_SYNONYM_MAP = {
+  schedule:'jadwal', timetable:'jadwal', agenda:'jadwal', class:'kuliah', lecture:'kuliah', lecturer:'dosen',
+  teacher:'dosen', professor:'dosen', prof:'dosen', academic:'akademik', tuition:'ukt', payment:'pembayaran',
+  pay:'pembayaran', fee:'ukt', fees:'ukt', course:'mata kuliah', courses:'mata kuliah', assignment:'tugas',
+  task:'tugas', exam:'ujian', test:'ujian', thesis:'skripsi', final:'akhir', guidance:'bimbingan',
+  consultation:'konsultasi', consult:'konsultasi', letter:'surat', permit:'izin', permission:'izin',
+  transcript:'transkrip', grade:'nilai', grades:'nilai', score:'nilai', login:'masuk', account:'akun',
+  deadline:'tenggat', due:'tenggat', collect:'kumpul', submit:'kumpul', submission:'pengumpulan',
+  administration:'administrasi', admin:'admin', scholarship:'beasiswa', calendar:'jadwal'
+};
+
+function normalizeAIText(value) {
+  let s = (value || '').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-z0-9\s@._-]/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+
+  const replacements = [
+    ['nggak','tidak'], ['ga','tidak'], ['gak','tidak'], ['tdk','tidak'], ['enggak','tidak'],
+    ['gimana','bagaimana'], ['gmna','bagaimana'], ['bgmn','bagaimana'], ['kapan','waktu'],
+    ['dimana','lokasi'], ['di mana','lokasi'], ['jadual','jadwal'], ['matkul','mata kuliah'],
+    ['siakad','siakad'], ['lms','lms'], ['ukt','ukt'], ['dospem','dosen pembimbing'],
+    ['pa','pembimbing akademik'], ['bimbing','bimbingan'], ['krs','krs'], ['khs','khs']
+  ];
+  replacements.forEach(([a,b]) => {
+    s = s.replace(new RegExp(`\\b${a}\\b`, 'g'), b);
+  });
+
+  s = s.split(' ').map(w => AI_SYNONYM_MAP[w] || w)
+    .map(w => w.replace(/(nya|lah|kah|pun)$/,'').replace(/(kan|an|ing|ed|s)$/,''))
+    .filter(Boolean)
+    .join(' ');
+  return s;
+}
+
+function aiTokens(value) {
+  return normalizeAIText(value).split(' ').filter(w => w.length > 2);
+}
+
+function aiSimilarity(a,b) {
+  const na = normalizeAIText(a);
+  const nb = normalizeAIText(b);
+  if(!na || !nb) return 0;
+  if(na === nb) return 1;
+  if(na.includes(nb) || nb.includes(na)) return 0.92;
+  const A = new Set(na.split(' ').filter(w=>w.length>2));
+  const B = new Set(nb.split(' ').filter(w=>w.length>2));
+  if(A.size === 0 || B.size === 0) return 0;
+  let inter = 0;
+  A.forEach(w => {
+    if(B.has(w)) inter++;
+    else {
+      for(const bw of B) {
+        if((w.length > 4 && bw.includes(w)) || (bw.length > 4 && w.includes(bw))) { inter += .75; break; }
+      }
+    }
+  });
+  const union = Math.max(A.size, B.size);
+  return inter / union;
+}
+
+function findBestKnowledgeMatch(kbRows, question) {
+  let best = null;
+  let bestScore = 0;
+  (kbRows || []).forEach(k => {
+    const scoreQ = aiSimilarity(question, k.question || '');
+    const scoreA = aiSimilarity(question, k.answer || '') * 0.35;
+    const score = Math.max(scoreQ, scoreA);
+    if(score > bestScore) { bestScore = score; best = k; }
+  });
+  return bestScore >= 0.42 ? best : null;
+}
+
+function applyUnansweredOwnerFilter(query, ownerId) {
+  return ownerId ? query.eq('owner_id', ownerId) : query.is('owner_id', null);
+}
+
+function isScheduleQuestion(question) {
+  const n = normalizeAIText(question);
+  const tokens = ['jadwal','kuliah','mengajar','bimbingan','konsultasi','bertemu','temu','waktu','agenda','kelas','kosong'];
+  return tokens.some(t => n.includes(t));
+}
+
+async function findLecturerForSchedule(question, explicitOwnerId=null) {
+  if(explicitOwnerId) {
+    const {data:p} = await sb.from('profiles').select('id,full_name,email,nidn,role').eq('id', explicitOwnerId).maybeSingle();
+    if(p && p.role === 'dosen') return p;
+  }
+  const {data:lecturers} = await sb.from('profiles').select('id,full_name,email,nidn,role').eq('role','dosen').limit(300);
+  const qNorm = normalizeAIText(question);
+  let best = null, score = 0;
+  (lecturers || []).forEach(d => {
+    const name = [d.full_name, d.email, d.nidn].filter(Boolean).join(' ');
+    const s = aiSimilarity(qNorm, name);
+    const nameTokens = aiTokens(d.full_name || '');
+    const tokenHit = nameTokens.length ? nameTokens.filter(t=>qNorm.includes(t)).length / nameTokens.length : 0;
+    const finalScore = Math.max(s, tokenHit);
+    if(finalScore > score) { score = finalScore; best = d; }
+  });
+  return score >= 0.34 ? best : null;
+}
+
+async function getLecturerScheduleAnswer(question, explicitOwnerId=null) {
+  if(!isScheduleQuestion(question)) return null;
+  const lecturer = await findLecturerForSchedule(question, explicitOwnerId);
+  if(!lecturer) {
+    return 'Saya bisa membantu melihat jadwal dosen, tetapi sebutkan nama dosennya dulu ya. Contoh: "Jadwal Bu Rina minggu ini kapan?"';
+  }
+  const now = new Date().toISOString();
+  const {data:schedules, error} = await sb.from('schedule_events')
+    .select('title,category,start_time,end_time,location,is_busy,deleted_at')
+    .eq('user_id', lecturer.id)
+    .is('deleted_at', null)
+    .gte('start_time', now)
+    .order('start_time', {ascending:true})
+    .limit(5);
+
+  if(error) return null;
+  if(!schedules || schedules.length === 0) {
+    return `Belum ada jadwal mendatang yang tercatat untuk ${lecturer.full_name || 'dosen tersebut'}.`;
+  }
+  const rows = schedules.map((s,i) => {
+    const loc = s.location ? ` di ${s.location}` : '';
+    const cat = s.category ? ` (${s.category})` : '';
+    return `${i+1}. ${fmtDt(s.start_time)}–${fmtTime(s.end_time)}: ${s.title || 'Jadwal'}${cat}${loc}`;
+  }).join('\n');
+  return `Jadwal terdekat ${lecturer.full_name || 'dosen tersebut'}:\n${rows}\n\nCatatan: informasi ini mengikuti jadwal yang tercatat di HaloKampus.`;
+}
+
 async function triggerAIResponse(requestId, userMsg) {
   const {data:req} = await sb.from('requests').select('recipient_id,recipient_type').eq('id',requestId).single();
   if(!req) return;
-  let ownerId = req.recipient_id; let scope = 'personal';
-  if(req.recipient_type==='admin') { scope='admin_group'; ownerId=null; }
-  let kbQ = sb.from('ai_knowledge_base').select('question,answer').eq('is_active',true);
-  if(scope==='admin_group') kbQ=kbQ.eq('owner_scope','admin_group');
-  else if(ownerId) kbQ=kbQ.eq('owner_id',ownerId).eq('owner_scope','personal');
+
+  let ownerId = req.recipient_id;
+  let scope = 'personal';
+  if(req.recipient_type === 'admin') { scope = 'admin_group'; ownerId = null; }
+
+  const scheduleAnswer = await getLecturerScheduleAnswer(userMsg, ownerId);
+  if(scheduleAnswer) {
+    await sb.from('request_messages').insert({request_id:requestId,sender_type:'ai_bot',ai_owner_id:ownerId||null,message:scheduleAnswer});
+    return;
+  }
+
+  let kbQ = sb.from('ai_knowledge_base').select('question,answer,category,owner_id,owner_scope').eq('is_active',true);
+  if(scope === 'admin_group') kbQ = kbQ.eq('owner_scope','admin_group');
+  else if(ownerId) kbQ = kbQ.eq('owner_id',ownerId).eq('owner_scope','personal');
+
   const {data:kb} = await kbQ;
-  if(!kb||kb.length===0) { saveUnanswered(requestId, userMsg, ownerId||undefined); return; }
-  const lower = userMsg.toLowerCase();
-  const match = kb.find(k=>lower.includes(k.question.toLowerCase())||k.question.toLowerCase().split(' ').some(w=>w.length>3&&lower.includes(w)));
-  if(!match) { saveUnanswered(requestId, userMsg, ownerId||undefined); return; }
+  const match = findBestKnowledgeMatch(kb || [], userMsg);
+
+  if(!match) {
+    await saveUnanswered(requestId, userMsg, ownerId || null);
+    return;
+  }
+
   await sb.from('request_messages').insert({request_id:requestId,sender_type:'ai_bot',ai_owner_id:ownerId||null,message:match.answer});
   const notifTarget = req.recipient_id || null;
   if(notifTarget) {
@@ -1749,9 +2471,46 @@ async function triggerAIResponse(requestId, userMsg) {
 }
 
 async function saveUnanswered(requestId, question, ownerId) {
-  const {data:ex} = await sb.from('unanswered_ai_questions').select('id,asked_count').ilike('question',question).eq('owner_id',ownerId||null).maybeSingle();
-  if(ex) { await sb.from('unanswered_ai_questions').update({asked_count:ex.asked_count+1,last_asked_at:new Date().toISOString()}).eq('id',ex.id); }
-  else { await sb.from('unanswered_ai_questions').insert({question,owner_id:ownerId||null,request_id:requestId}); }
+  const normalized = normalizeAIText(question);
+  let q = sb.from('unanswered_ai_questions')
+    .select('id,question,asked_count,normalized_question')
+    .limit(200);
+  q = applyUnansweredOwnerFilter(q, ownerId || null);
+  const {data:rows} = await q;
+
+  let match = null;
+  let best = 0;
+  (rows || []).forEach(r => {
+    const score = Math.max(
+      aiSimilarity(question, r.question || ''),
+      aiSimilarity(normalized, r.normalized_question || '')
+    );
+    if(score > best) { best = score; match = r; }
+  });
+
+  if(match && best >= 0.62) {
+    const nextCount = (Number(match.asked_count) || 1) + 1;
+    await sb.from('unanswered_ai_questions')
+      .update({
+        asked_count: nextCount,
+        normalized_question: match.normalized_question || normalized,
+        should_display: nextCount >= UNANSWERED_ANALYSIS_THRESHOLD,
+        last_asked_at: new Date().toISOString(),
+        request_id: requestId || null
+      })
+      .eq('id', match.id);
+  } else {
+    await sb.from('unanswered_ai_questions').insert({
+      question,
+      normalized_question: normalized,
+      owner_id: ownerId || null,
+      request_id: requestId || null,
+      asked_count: 1,
+      should_display: false,
+      first_asked_at: new Date().toISOString(),
+      last_asked_at: new Date().toISOString()
+    });
+  }
 }
 
 // ============================================================
@@ -1759,37 +2518,154 @@ async function saveUnanswered(requestId, question, ownerId) {
 // ============================================================
 async function renderBotAI(body) {
   body.innerHTML = `
-    <div class="section-header"><h2>Bot HaloKampus</h2></div>
+    <div class="section-header">
+      <h2>Bot HaloKampus</h2>
+      <button class="btn btn-ghost btn-sm" onclick="clearBotChat()">🗑️ Bersihkan Chat</button>
+    </div>
     <div class="card" style="max-width:680px">
-      <p style="font-size:.875rem;color:var(--text-gray);margin-bottom:1.25rem">Tanyakan informasi akademik. Bot akan menjawab berdasarkan database pengetahuan yang tersedia.</p>
+      <p style="font-size:.875rem;color:var(--text-gray);margin-bottom:1.25rem">Tanyakan informasi akademik. Bot akan menjawab berdasarkan database pengetahuan yang tersedia. Riwayat percakapan Anda tersimpan otomatis dan tetap ada saat Anda kembali membuka menu ini.</p>
       <div class="ai-chat-wrap">
-        <div class="ai-messages" id="ai-messages">
-          <div class="msg-wrap theirs"><div class="msg-bubble">Halo! Saya Bot HaloKampus. Silakan tanyakan informasi akademik yang Anda butuhkan. 😊</div></div>
-        </div>
+        <div class="ai-messages" id="ai-messages"><div class="spinner" style="margin:2rem auto"></div></div>
         <div class="ai-input-area">
           <textarea class="chat-input" id="ai-input" placeholder="Ketik pertanyaan..." rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();askBot()}"></textarea>
-          <button class="btn btn-primary btn-sm" onclick="askBot()">Tanya</button>
+          <button class="btn btn-primary btn-sm" id="ai-send-btn" onclick="askBot()">Tanya</button>
         </div>
       </div>
     </div>`;
+  await loadBotChatHistory();
+}
+
+function botMsgBubble(row) {
+  const isUser = row.sender_type==='user';
+  const time = fmtTime(row.created_at);
+  if(isUser) {
+    return `<div class="msg-wrap mine"><div class="msg-bubble">${escapeHtml(row.message)}</div><div class="msg-meta">${time}</div></div>`;
+  }
+  return `<div class="msg-wrap bot"><div class="bot-label">🤖 Bot HaloKampus</div><div class="msg-bubble">${escapeHtml(row.message)}</div><div class="msg-meta">${time}</div></div>`;
+}
+
+async function loadBotChatHistory() {
+  const msgs = $('ai-messages');
+  if(!msgs||!currentUser) return;
+  const {data,error} = await sb.from('ai_bot_chat_history').select('*').eq('user_id',currentUser.id).order('created_at',{ascending:true});
+  if(error) {
+    msgs.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><p>${getErrorMessage(error)}</p></div>`;
+    return;
+  }
+  if(!data||data.length===0) {
+    msgs.innerHTML = `<div class="msg-wrap theirs"><div class="msg-bubble">Halo! Saya Bot HaloKampus. Silakan tanyakan informasi akademik yang Anda butuhkan. 😊</div></div>`;
+    return;
+  }
+  msgs.innerHTML = data.map(botMsgBubble).join('');
+  msgs.scrollTop = msgs.scrollHeight;
 }
 
 window.askBot = async function() {
-  const inp = $('ai-input'); const msgs = $('ai-messages');
-  if(!inp||!msgs||!inp.value.trim()) return;
+  const inp = $('ai-input'); const msgs = $('ai-messages'); const btn = $('ai-send-btn');
+  if(!inp||!msgs||!inp.value.trim()||!currentUser) return;
   const q = inp.value.trim(); inp.value='';
-  msgs.innerHTML+=`<div class="msg-wrap mine"><div class="msg-bubble">${q}</div></div>`;
-  msgs.scrollTop=msgs.scrollHeight;
-  const {data:kb} = await sb.from('ai_knowledge_base').select('question,answer').eq('is_active',true);
-  const lower = q.toLowerCase();
-  const match = (kb||[]).find(k=>lower.includes(k.question.toLowerCase())||k.question.toLowerCase().split(' ').some(w=>w.length>3&&lower.includes(w)));
-  if(match) {
-    msgs.innerHTML+=`<div class="msg-wrap bot"><div class="bot-label">🤖 Bot HaloKampus</div><div class="msg-bubble">${match.answer}</div></div>`;
-  } else {
-    msgs.innerHTML+=`<div class="msg-wrap bot"><div class="bot-label">🤖 Bot HaloKampus</div><div class="msg-bubble">Pertanyaan ini belum tersedia di database AI dan akan menjadi bahan evaluasi. Silakan hubungi dosen atau admin terkait melalui Request Chat.</div></div>`;
-    await sb.from('unanswered_ai_questions').insert({question:q,owner_id:null});
+  if(btn) btn.disabled = true;
+  try {
+    const {error:e1} = await sb.from('ai_bot_chat_history').insert({user_id:currentUser.id,sender_type:'user',message:q});
+    if(e1) { showToast('Gagal menyimpan pesan: '+getErrorMessage(e1),'error'); inp.value=q; return; }
+
+    let answer = await getLecturerScheduleAnswer(q, null);
+    if(!answer) {
+      const {data:kb} = await sb.from('ai_knowledge_base').select('question,answer,category,owner_id,owner_scope').eq('is_active',true).limit(500);
+      const match = findBestKnowledgeMatch(kb || [], q);
+      if(match) {
+        answer = match.answer;
+      } else {
+        answer = 'Pertanyaan ini belum tersedia di database AI dan akan menjadi bahan evaluasi jika banyak mahasiswa menanyakan hal serupa. Silakan hubungi dosen atau admin terkait melalui Request Chat.';
+        await saveUnanswered(null, q, null);
+      }
+    }
+
+    const {error:e2} = await sb.from('ai_bot_chat_history').insert({user_id:currentUser.id,sender_type:'bot',message:answer});
+    if(e2) showToast('Gagal menyimpan jawaban bot: '+getErrorMessage(e2),'error');
+    await loadBotChatHistory();
+  } catch(err) {
+    showToast('Bot gagal menjawab: '+getErrorMessage(err), 'error');
+  } finally {
+    if(btn) btn.disabled = false;
   }
-  msgs.scrollTop=msgs.scrollHeight;
+};
+
+window.clearBotChat = async function() {
+  if(!currentUser) return;
+  if(!confirm('Hapus semua riwayat chat Bot HaloKampus Anda? Tindakan ini tidak dapat dibatalkan.')) return;
+  const {error} = await sb.from('ai_bot_chat_history').delete().eq('user_id',currentUser.id);
+  if(error) { showToast('Gagal membersihkan chat: '+getErrorMessage(error),'error'); return; }
+  showToast('Riwayat chat berhasil dibersihkan.','success');
+  await loadBotChatHistory();
+};
+
+
+// ============================================================
+// SAMPAH CHAT — pesan yang dihapus
+// ============================================================
+async function renderSampahChat(body) {
+  body.innerHTML = `
+    <div class="section-header">
+      <h2>Sampah Chat</h2>
+      <button class="btn btn-ghost btn-sm" onclick="loadDeletedChatMessages()">Refresh</button>
+    </div>
+    <p style="font-size:.875rem;color:var(--text-gray);margin-bottom:1rem">Berisi pesan chat yang pernah Anda hapus. Pesan bisa dipulihkan atau dihapus permanen.</p>
+    <div id="deleted-chat-list"><div class="spinner" style="margin:2rem auto"></div></div>`;
+  await loadDeletedChatMessages();
+}
+
+window.loadDeletedChatMessages = async function() {
+  const wrap = $('deleted-chat-list');
+  if(!wrap || !currentUser) return;
+  const {data,error} = await sb.from('request_messages')
+    .select('*,request:requests(request_code,subject,category,status)')
+    .eq('sender_id', currentUser.id)
+    .eq('is_deleted', true)
+    .order('deleted_at', {ascending:false});
+  if(error) {
+    wrap.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><p>${getErrorMessage(error)}</p></div>`;
+    return;
+  }
+  if(!data || data.length===0) {
+    wrap.innerHTML = `<div class="empty-state"><div class="empty-icon">🗑️</div><p>Belum ada pesan chat yang dihapus.</p></div>`;
+    return;
+  }
+  wrap.innerHTML = data.map(m=>`
+    <div class="card" style="margin-bottom:.75rem">
+      <div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:.75rem;color:var(--text-gray);font-weight:700">${escapeHtml(m.request?.request_code||'—')} · ${escapeHtml(m.request?.subject||'Request')}</div>
+          <p style="font-size:.9rem;line-height:1.6;margin-top:.5rem;white-space:pre-wrap">${escapeHtml(m.original_message || m.message || 'Pesan telah dihapus')}</p>
+          <div style="font-size:.75rem;color:var(--text-gray);margin-top:.5rem">Dihapus: ${fmtDt(m.deleted_at)}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:.4rem;flex-shrink:0">
+          <button class="btn btn-success btn-sm" onclick="restoreDeletedChatMessage('${m.id}')">Pulihkan</button>
+          <button class="btn btn-danger btn-sm" onclick="permanentDeleteChatMessage('${m.id}')">Hapus Permanen</button>
+        </div>
+      </div>
+    </div>`).join('');
+};
+
+window.restoreDeletedChatMessage = async function(id) {
+  const {data:m,error:loadErr} = await sb.from('request_messages').select('*').eq('id',id).eq('sender_id',currentUser.id).single();
+  if(loadErr || !m) { showToast('Pesan tidak ditemukan: '+getErrorMessage(loadErr),'error'); return; }
+  const restored = m.original_message || m.message || '';
+  const {error} = await sb.from('request_messages')
+    .update({is_deleted:false,deleted_at:null,deleted_by:null,message:restored,original_message:null})
+    .eq('id',id)
+    .eq('sender_id',currentUser.id);
+  if(error) { showToast('Gagal memulihkan pesan: '+getErrorMessage(error),'error'); return; }
+  showToast('Pesan dipulihkan.', 'success');
+  await loadDeletedChatMessages();
+};
+
+window.permanentDeleteChatMessage = async function(id) {
+  if(!confirm('Hapus permanen pesan ini? Tindakan ini tidak bisa dibatalkan.')) return;
+  const {error} = await sb.from('request_messages').delete().eq('id',id).eq('sender_id',currentUser.id);
+  if(error) { showToast('Gagal hapus permanen: '+getErrorMessage(error),'error'); return; }
+  showToast('Pesan dihapus permanen.', 'success');
+  await loadDeletedChatMessages();
 };
 
 // ============================================================
@@ -1799,8 +2675,8 @@ async function renderJadwal(body) {
   const uid = currentUser.id;
   const role = currentProfile.role;
   const today = new Date().toISOString().split('T')[0];
-  const {data:todaySched} = await sb.from('schedule_events').select('*').eq('user_id',uid).gte('start_time',today+'T00:00:00').lte('start_time',today+'T23:59:59').order('start_time');
-  const {data:upcoming} = await sb.from('schedule_events').select('*').eq('user_id',uid).gt('start_time',today+'T23:59:59').order('start_time').limit(10);
+  const {data:todaySched} = await sb.from('schedule_events').select('*').eq('user_id',uid).is('deleted_at', null).gte('start_time',today+'T00:00:00').lte('start_time',today+'T23:59:59').order('start_time');
+  const {data:upcoming} = await sb.from('schedule_events').select('*').eq('user_id',uid).is('deleted_at', null).gt('start_time',today+'T23:59:59').order('start_time').limit(10);
   const catsMhs=['Kuliah','Tugas','Ujian','Bimbingan','Organisasi','Lainnya'];
   const catsDosen=['Mengajar','Bimbingan','Rapat','Seminar','Penelitian','Pengabdian','Lainnya'];
   const cats = role==='mahasiswa'?catsMhs:catsDosen;
@@ -1820,6 +2696,28 @@ async function renderJadwal(body) {
         ${(upcoming||[]).length===0?'<div class="empty-state"><div class="empty-icon">📭</div><p>Tidak ada jadwal mendatang.</p></div>':
           (upcoming||[]).map(s=>scheduleItem(s)).join('')}
       </div>
+    </div>
+    <div class="card" style="margin-top:1.5rem">
+      <div class="section-header" style="margin-bottom:1rem">
+        <div>
+          <h2 style="font-size:1.05rem">Daftar Kegiatan / Tugas</h2>
+          <p style="font-size:.8rem;color:var(--text-gray);margin-top:.25rem">Catat tugas, follow up, atau kegiatan pribadi terkait akademik.</p>
+        </div>
+      </div>
+      <form onsubmit="addTodo(event)" style="display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:.6rem;align-items:end;margin-bottom:1rem">
+        <div class="form-group"><label class="form-label">Judul</label><input class="form-input" id="todo-title" placeholder="Contoh: Revisi proposal" required/></div>
+        <div class="form-group"><label class="form-label">Tenggat</label><input class="form-input" type="datetime-local" id="todo-due"/></div>
+        <div class="form-group"><label class="form-label">Kategori</label><input class="form-input" id="todo-cat" placeholder="Tugas/Bimbingan"/></div>
+        <button class="btn btn-primary" type="submit">Tambah</button>
+        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Deskripsi opsional</label><input class="form-input" id="todo-desc" placeholder="Catatan singkat..."/></div>
+      </form>
+      <div id="todo-summary" style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.75rem"></div>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem">
+        <button type="button" class="todo-filter-btn active" id="todo-filter-semua" onclick="setTodoFilter('semua')">Semua</button>
+        <button type="button" class="todo-filter-btn" id="todo-filter-belum" onclick="setTodoFilter('belum')">Belum selesai</button>
+        <button type="button" class="todo-filter-btn" id="todo-filter-selesai" onclick="setTodoFilter('selesai')">Selesai</button>
+      </div>
+      <div id="todo-list"><div class="spinner" style="margin:2rem auto"></div></div>
     </div>
     <div id="schedule-modal" class="modal-overlay hidden" onclick="if(event.target===this)this.classList.add('hidden')">
       <div class="modal-box">
@@ -1852,6 +2750,7 @@ async function renderJadwal(body) {
         </form>
       </div>
     </div>`;
+  await loadTodos();
 }
 
 function scheduleItem(s) {
@@ -1901,8 +2800,131 @@ window.saveSchedule = async function(e) {
 };
 window.deleteSchedule = async function(id) {
   if(!confirm('Hapus jadwal ini?')) return;
-  await sb.from('schedule_events').delete().eq('id',id);
-  showToast('Jadwal dihapus','success'); loadDashPage('jadwal');
+  const {error} = await sb.from('schedule_events').update({
+    deleted_at:new Date().toISOString(),
+    deleted_by:currentUser.id,
+    trash_expires_at:plusDaysIso(new Date(),30)
+  }).eq('id',id).eq('user_id',currentUser.id);
+  if(error) { showToast('Gagal hapus jadwal: '+getErrorMessage(error),'error'); return; }
+  showToast('Jadwal dihapus.', 'success'); loadDashPage('jadwal');
+};
+
+
+// ============================================================
+// TO-DO LIST / CHECKLIST JADWAL
+// ============================================================
+async function loadTodos() {
+  const list = $('todo-list');
+  const summary = $('todo-summary');
+  if(!list || !currentUser) return;
+  const {data,error} = await sb.from('schedule_todos').select('*').eq('user_id',currentUser.id).is('deleted_at',null).order('created_at',{ascending:false});
+  if(error) {
+    list.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><p>${getErrorMessage(error)}</p></div>`;
+    return;
+  }
+  window._todos = data || [];
+  const total = window._todos.length;
+  const done = window._todos.filter(t=>t.is_completed).length;
+  const pending = total - done;
+  if(summary) summary.innerHTML = `
+    <span class="badge badge-blue">Total: ${total}</span>
+    <span class="badge badge-yellow">Belum selesai: ${pending}</span>
+    <span class="badge badge-green">Selesai: ${done}</span>`;
+  renderTodoList();
+}
+
+function renderTodoList() {
+  const list = $('todo-list');
+  if(!list) return;
+  let rows = window._todos || [];
+  if(todoFilter==='belum') rows = rows.filter(t=>!t.is_completed);
+  if(todoFilter==='selesai') rows = rows.filter(t=>t.is_completed);
+  ['semua','belum','selesai'].forEach(f=>{
+    const btn = $('todo-filter-'+f);
+    if(btn) btn.classList.toggle('active', todoFilter===f);
+  });
+  if(rows.length===0) {
+    list.innerHTML = `<div class="empty-state"><div class="empty-icon">📝</div><p>Belum ada daftar kegiatan. Tambahkan tugas atau kegiatan pertama Anda.</p></div>`;
+    return;
+  }
+  list.innerHTML = rows.map(t=>`
+    <div class="todo-item ${t.is_completed?'completed':''}">
+      <input class="todo-check" type="checkbox" ${t.is_completed?'checked':''} onchange="toggleTodo('${t.id}',this.checked)"/>
+      <div style="flex:1;min-width:0">
+        <div class="todo-title">${escapeHtml(t.title)}</div>
+        ${t.description?`<div style="font-size:.82rem;color:var(--text-gray);line-height:1.5;margin-top:.25rem">${escapeHtml(t.description)}</div>`:''}
+        <div class="todo-meta">${t.due_date?'📅 '+fmtDt(t.due_date):'Tanpa tenggat'}${t.category?' · 📁 '+escapeHtml(t.category):''}</div>
+      </div>
+      <div class="todo-actions">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="editTodo('${t.id}')">✏️</button>
+        <button type="button" class="btn btn-danger btn-sm" onclick="deleteTodo('${t.id}')">🗑️</button>
+      </div>
+    </div>`).join('');
+}
+
+window.setTodoFilter = function(f) {
+  todoFilter = f;
+  renderTodoList();
+};
+
+window.addTodo = async function(e) {
+  e.preventDefault();
+  const title = $('todo-title')?.value.trim();
+  if(!title) return;
+  const payload = {
+    user_id: currentUser.id,
+    title,
+    description: $('todo-desc')?.value.trim() || null,
+    due_date: $('todo-due')?.value ? new Date($('todo-due').value).toISOString() : null,
+    category: $('todo-cat')?.value.trim() || null,
+    is_completed:false
+  };
+  const {error} = await sb.from('schedule_todos').insert(payload);
+  if(error) { showToast('Gagal tambah to-do: '+getErrorMessage(error),'error'); return; }
+  ['todo-title','todo-desc','todo-due','todo-cat'].forEach(id=>{ if($(id)) $(id).value=''; });
+  showToast('To-do ditambahkan.', 'success');
+  await loadTodos();
+};
+
+window.toggleTodo = async function(id, checked) {
+  const {error} = await sb.from('schedule_todos').update({
+    is_completed: checked,
+    completed_at: checked ? new Date().toISOString() : null
+  }).eq('id',id).eq('user_id',currentUser.id);
+  if(error) { showToast('Gagal update to-do: '+getErrorMessage(error),'error'); return; }
+  await loadTodos();
+};
+
+window.editTodo = async function(id) {
+  const t = (window._todos||[]).find(x=>x.id===id);
+  if(!t) return;
+  const title = prompt('Edit judul kegiatan:', t.title || '');
+  if(title === null) return;
+  const clean = title.trim();
+  if(!clean) { showToast('Judul tidak boleh kosong.', 'error'); return; }
+  const desc = prompt('Edit deskripsi (boleh kosong):', t.description || '');
+  if(desc === null) return;
+  const category = prompt('Edit kategori (boleh kosong):', t.category || '');
+  if(category === null) return;
+  const {error} = await sb.from('schedule_todos').update({
+    title: clean,
+    description: desc.trim() || null,
+    category: category.trim() || null
+  }).eq('id',id).eq('user_id',currentUser.id);
+  if(error) { showToast('Gagal edit to-do: '+getErrorMessage(error),'error'); return; }
+  showToast('To-do diperbarui.', 'success');
+  await loadTodos();
+};
+
+window.deleteTodo = async function(id) {
+  if(!confirm('Hapus kegiatan/tugas ini?')) return;
+  const {error} = await sb.from('schedule_todos').update({
+    deleted_at:new Date().toISOString(),
+    deleted_by:currentUser.id
+  }).eq('id',id).eq('user_id',currentUser.id);
+  if(error) { showToast('Gagal hapus to-do: '+getErrorMessage(error),'error'); return; }
+  showToast('To-do dihapus.', 'success');
+  await loadTodos();
 };
 
 // ============================================================
@@ -1928,13 +2950,43 @@ async function renderStatusTracking(body) {
 async function renderRiwayat(body) {
   const uid = currentUser.id; const role = currentProfile.role;
   let q;
-  if(role==='mahasiswa') q=sb.from('requests').select('*,recipient:profiles!requests_recipient_id_fkey(full_name,role)').eq('sender_id',uid).eq('status','selesai').order('completed_at',{ascending:false});
-  else if(role==='admin') q=sb.from('requests').select('*,sender:profiles!requests_sender_id_fkey(full_name,role,nim,fakultas,program_studi)').eq('recipient_type','admin').eq('status','selesai').order('completed_at',{ascending:false});
-  else q=sb.from('requests').select('*,sender:profiles!requests_sender_id_fkey(full_name,role,nim,fakultas,program_studi)').eq('recipient_id',uid).eq('status','selesai').order('completed_at',{ascending:false});
-  const {data} = await q;
-  body.innerHTML=`<div class="section-header"><h2>Riwayat Request</h2></div>
-    ${!data||data.length===0?'<div class="empty-state"><div class="empty-icon">📚</div><p>Belum ada request yang selesai.</p></div>':data.map(r=>requestCard(r,role)).join('')}`;
+  if(role==='mahasiswa') {
+    const [sent,inbox] = await Promise.all([
+      sb.from('requests').select('*,recipient:profiles!requests_recipient_id_fkey(full_name,role,nim,nidn,fakultas,program_studi),sender:profiles!requests_sender_id_fkey(full_name,role,nim,nidn,fakultas,program_studi)').eq('sender_id',uid).eq('status','selesai'),
+      sb.from('requests').select('*,recipient:profiles!requests_recipient_id_fkey(full_name,role,nim,nidn,fakultas,program_studi),sender:profiles!requests_sender_id_fkey(full_name,role,nim,nidn,fakultas,program_studi)').eq('recipient_id',uid).eq('status','selesai')
+    ]);
+    window._historyReqs = onlyCompletedRequests([...(sent.data||[]),...(inbox.data||[])]);
+  } else if(role==='admin') {
+    const {data,error} = await applyAdminRequestFilter(sb.from('requests').select('*,sender:profiles!requests_sender_id_fkey(full_name,role,nim,nidn,fakultas,program_studi),recipient:profiles!requests_recipient_id_fkey(full_name,role,nim,nidn,fakultas,program_studi)').eq('status','selesai'), uid).order('completed_at',{ascending:false});
+    if(error) { body.innerHTML = `<div class="section-header"><h2>Riwayat Chat</h2></div><div class="empty-state"><div class="empty-icon">⚠️</div><p>${getErrorMessage(error)}</p></div>`; return; }
+    window._historyReqs = onlyCompletedRequests(data||[]);
+  } else {
+    const [sent,inbox] = await Promise.all([
+      sb.from('requests').select('*,sender:profiles!requests_sender_id_fkey(full_name,role,nim,nidn,fakultas,program_studi),recipient:profiles!requests_recipient_id_fkey(full_name,role,nim,nidn,fakultas,program_studi)').eq('sender_id',uid).eq('status','selesai'),
+      sb.from('requests').select('*,sender:profiles!requests_sender_id_fkey(full_name,role,nim,nidn,fakultas,program_studi),recipient:profiles!requests_recipient_id_fkey(full_name,role,nim,nidn,fakultas,program_studi)').eq('recipient_id',uid).eq('status','selesai')
+    ]);
+    window._historyReqs = onlyCompletedRequests([...(sent.data||[]),...(inbox.data||[])]);
+  }
+  catFilterRiwayat = catFilterRiwayat || '';
+  body.innerHTML=`<div class="section-header"><h2>Riwayat Chat</h2></div>
+    <p style="font-size:.875rem;color:var(--text-gray);margin-bottom:1rem">Request yang sudah selesai dipindahkan ke riwayat agar dashboard aktif tetap bersih.</p>
+    <div id="riwayat-wrap"></div>`;
+  renderRiwayatUI();
 }
+
+function renderRiwayatUI() {
+  const wrap = $('riwayat-wrap');
+  if(!wrap) return;
+  const reqs = window._historyReqs || [];
+  const filtered = sortRequests(filterByCategory(reqs, catFilterRiwayat));
+  wrap.innerHTML = `
+    ${categoryChipsHtml(reqs, catFilterRiwayat, 'setCatFilterRiwayat')}
+    ${filtered.length===0?'<div class="empty-state"><div class="empty-icon">📚</div><p>Belum ada riwayat chat pada kategori ini.</p></div>':filtered.map(r=>requestCard(r,currentProfile.role)).join('')}`;
+}
+window.setCatFilterRiwayat = function(cat) {
+  catFilterRiwayat = cat;
+  renderRiwayatUI();
+};
 
 // ============================================================
 // MONITORING
@@ -1945,7 +2997,7 @@ async function renderMonitoring(body) {
   if(role==='admin') q=sb.from('requests').select('category,status,priority,created_at').eq('recipient_type','admin');
   else q=sb.from('requests').select('category,status,priority,created_at').eq('recipient_id',uid);
   const {data:reqs}=await q;
-  const all=reqs||[];
+  const all=onlyActiveRequests(excludeTrashed(reqs||[]));
   const catCount={};
   all.forEach(r=>{catCount[r.category]=(catCount[r.category]||0)+1;});
   const cats=Object.keys(catCount).sort((a,b)=>catCount[b]-catCount[a]);
@@ -1994,7 +3046,9 @@ async function renderAturBot(body) {
   let q=sb.from('ai_knowledge_base').select('*').eq('owner_scope',scope);
   if(scope==='personal') q=q.eq('owner_id',uid);
   const {data:kb}=await q.order('created_at',{ascending:false});
-  const {data:unanswered}=await sb.from('unanswered_ai_questions').select('*').eq('owner_id',uid).order('last_asked_at',{ascending:false}).limit(20);
+  let unansweredQ = sb.from('unanswered_ai_questions').select('*').gte('asked_count', UNANSWERED_ANALYSIS_THRESHOLD).order('last_asked_at',{ascending:false}).limit(20);
+  unansweredQ = role==='admin' ? unansweredQ.is('owner_id', null) : unansweredQ.eq('owner_id', uid);
+  const {data:unanswered}=await unansweredQ;
   body.innerHTML=`
     <div class="section-header">
       <h2>Konfigurasi Bot AI</h2>
@@ -2020,11 +3074,11 @@ async function renderAturBot(body) {
           </div>`).join('')}
       </div>
       <div>
-        <h3 style="font-size:1rem;font-weight:700;margin-bottom:1rem">Pertanyaan Belum Terjawab</h3>
+        <h3 style="font-size:1rem;font-weight:700;margin-bottom:.35rem">Analisis Pertanyaan Belum Terjawab</h3><p style="font-size:.78rem;color:var(--text-gray);margin-bottom:1rem">Hanya pertanyaan serupa yang sudah ditanyakan minimal 7 kali yang ditampilkan, supaya dosen/admin tidak kebanjiran pertanyaan tunggal.</p>
         ${!unanswered||unanswered.length===0?'<div class="empty-state"><div class="empty-icon">✅</div><p>Tidak ada pertanyaan yang belum terjawab.</p></div>':
           unanswered.map(u=>`<div class="card" style="margin-bottom:.75rem">
             <p style="font-size:.875rem;font-weight:600">❓ ${u.question}</p>
-            <p style="font-size:.78rem;color:var(--text-gray);margin-top:.25rem">Ditanya ${u.asked_count}x · Terakhir: ${timeAgo(u.last_asked_at)}</p>
+            <p style="font-size:.78rem;color:var(--text-gray);margin-top:.25rem">Ditanya ${u.asked_count || 1}x · Terakhir: ${timeAgo(u.last_asked_at)}</p>
             <button class="btn btn-ghost btn-sm" style="margin-top:.5rem" onclick="addAnswerFromUnanswered('${u.id}',${JSON.stringify(u.question).replace(/"/g,'&quot;')})">+ Tambahkan Jawaban</button>
           </div>`).join('')}
       </div>
@@ -2262,6 +3316,334 @@ async function checkReminders(){
 // ATTACH PAGE LISTENERS
 // ============================================================
 function attachPageListeners() {}
+
+
+// ============================================================
+// GLOBAL SEARCH
+// ============================================================
+function closeGlobalSearch() {
+  const old = $('global-search-dropdown');
+  if(old) old.remove();
+}
+
+async function performGlobalSearch(raw) {
+  const term = (raw || '').trim().toLowerCase();
+  closeGlobalSearch();
+  const input = $('topbar-search');
+  if(!input || term.length < 2 || !currentUser) return;
+
+  const box = document.createElement('div');
+  box.id = 'global-search-dropdown';
+  box.className = 'global-search-dropdown';
+  input.parentElement.appendChild(box);
+  box.innerHTML = `<div class="global-search-item"><div class="global-search-title">Mencari...</div></div>`;
+
+  try {
+    const uid = currentUser.id;
+    const role = currentProfile.role;
+    let results = [];
+
+    let reqQ = sb.from('requests')
+      .select('id,request_code,subject,description,category,status,deleted_at,sender_id,recipient_id,recipient_type,sender:profiles!requests_sender_id_fkey(full_name,email),recipient:profiles!requests_recipient_id_fkey(full_name,email)')
+      .limit(50);
+    if(role==='admin') reqQ = applyAdminRequestFilter(reqQ, uid);
+    else reqQ = reqQ.or(`sender_id.eq.${uid},recipient_id.eq.${uid}`);
+    const {data:reqs} = await reqQ;
+    (reqs||[]).filter(r=>{
+      const hay = [r.request_code,r.subject,r.description,r.category,r.status,r.sender?.full_name,r.sender?.email,r.recipient?.full_name,r.recipient?.email].join(' ').toLowerCase();
+      return hay.includes(term);
+    }).slice(0,8).forEach(r=>results.push({
+      type: r.status==='selesai'?'Riwayat Chat':'Request',
+      title: `${r.request_code||'—'} · ${r.subject||'Request'}`,
+      sub: `${r.category||'—'} · ${statusLabel(r.status)}`,
+      action: `openChat('${r.id}')`
+    }));
+
+    const {data:schedules} = await sb.from('schedule_events').select('id,title,description,category,location,start_time,deleted_at').eq('user_id',uid).is('deleted_at',null).limit(50);
+    (schedules||[]).filter(s=>[s.title,s.description,s.category,s.location].join(' ').toLowerCase().includes(term)).slice(0,5).forEach(s=>results.push({
+      type:'Jadwal',
+      title:s.title,
+      sub:`${s.category||'—'} · ${fmtDt(s.start_time)}`,
+      action:`navTo('jadwal')`
+    }));
+
+    const {data:todos} = await sb.from('schedule_todos').select('id,title,description,category,due_date,is_completed,deleted_at').eq('user_id',uid).is('deleted_at',null).limit(50);
+    (todos||[]).filter(t=>[t.title,t.description,t.category].join(' ').toLowerCase().includes(term)).slice(0,5).forEach(t=>results.push({
+      type:'To-do',
+      title:t.title,
+      sub:`${t.category||'—'} · ${t.is_completed?'Selesai':'Belum selesai'}`,
+      action:`navTo('jadwal')`
+    }));
+
+    if(role==='mahasiswa') {
+      const {data:botRows} = await sb.from('ai_bot_chat_history').select('id,message,sender_type,created_at').eq('user_id',uid).limit(50);
+      (botRows||[]).filter(b=>(b.message||'').toLowerCase().includes(term)).slice(0,5).forEach(b=>results.push({
+        type:'Bot',
+        title:b.sender_type==='user'?'Pertanyaan Anda':'Jawaban Bot',
+        sub:(b.message||'').slice(0,120),
+        action:`navTo('bot-ai')`
+      }));
+    }
+
+    if(results.length===0) {
+      box.innerHTML = `<div class="global-search-item"><div class="global-search-title">Tidak ada hasil yang cocok.</div></div>`;
+      return;
+    }
+    box.innerHTML = results.slice(0,15).map(r=>`
+      <div class="global-search-item" onclick="closeGlobalSearch();${r.action}">
+        <div class="global-search-type">${escapeHtml(r.type)}</div>
+        <div class="global-search-title">${escapeHtml(r.title)}</div>
+        <div class="global-search-sub">${escapeHtml(r.sub||'')}</div>
+      </div>`).join('');
+  } catch(err) {
+    box.innerHTML = `<div class="global-search-item"><div class="global-search-title">Gagal mencari</div><div class="global-search-sub">${getErrorMessage(err)}</div></div>`;
+  }
+}
+window.closeGlobalSearch = closeGlobalSearch;
+window.performGlobalSearch = performGlobalSearch;
+
+
+
+// ============================================================
+// FINAL NOTIFICATION CLEANUP PATCH — deleted/cancelled benar-benar hilang dari notif
+// ============================================================
+function requestHiddenFromNotification(req) {
+  return !req || req.status === 'dibatalkan' || !!req.deleted_at;
+}
+
+async function getRequestForNotifGuard(requestId) {
+  if(!requestId || requestId === 'null' || requestId === 'undefined') return null;
+  const {data, error} = await sb.from('requests')
+    .select('id,status,deleted_at,sender_id,recipient_id,recipient_type')
+    .eq('id', requestId)
+    .maybeSingle();
+  if(error) return null;
+  return data || null;
+}
+
+async function cleanupNotificationsForHiddenRequest(requestId) {
+  if(!currentUser || !requestId) return;
+  try {
+    await sb.from('notifications')
+      .delete()
+      .eq('user_id', currentUser.id)
+      .eq('request_id', requestId);
+  } catch(e) {
+    console.warn('cleanup notif skipped', e);
+  }
+}
+
+async function cleanupMessageNotificationsForRequest(requestId) {
+  if(!currentUser || !requestId) return;
+  try {
+    await sb.from('notifications')
+      .delete()
+      .eq('user_id', currentUser.id)
+      .eq('request_id', requestId)
+      .or('type.in.(new_message,message,request_message,chat_message,ai_response),title.ilike.%pesan%,body.ilike.%pesan%,title.ilike.%chat%,body.ilike.%chat%');
+  } catch(e) {
+    console.warn('cleanup message notif skipped', e);
+  }
+}
+
+async function filterVisibleNotifications(notifs) {
+  const rows = (notifs || []).filter(Boolean);
+  const requestIds = [...new Set(rows.map(n => n.request_id).filter(id => id && id !== 'null' && id !== 'undefined'))];
+  if(requestIds.length === 0) return rows;
+
+  const {data:reqs} = await sb.from('requests')
+    .select('id,status,deleted_at')
+    .in('id', requestIds);
+  const reqMap = Object.fromEntries((reqs || []).map(r => [r.id, r]));
+  const hiddenIds = requestIds.filter(id => requestHiddenFromNotification(reqMap[id]));
+
+  if(hiddenIds.length) {
+    try {
+      await sb.from('notifications')
+        .delete()
+        .eq('user_id', currentUser.id)
+        .in('request_id', hiddenIds);
+    } catch(e) {
+      console.warn('stale notif delete skipped', e);
+    }
+  }
+
+  return rows.filter(n => {
+    if(!n.request_id) return true;
+    return !hiddenIds.includes(n.request_id);
+  });
+}
+
+// Override: request dibatalkan = masuk sampah dan semua notif request itu dibersihkan.
+window.cancelRequest = async function(id) {
+  if(!confirm('Batalkan dan hapus request ini dari penerima? Request akan masuk ke Sampah Anda dan tidak muncul lagi di notifikasi penerima.')) return;
+  const {data:req} = await sb.from('requests')
+    .select('id,status')
+    .eq('id', id)
+    .eq('sender_id', currentUser.id)
+    .maybeSingle();
+
+  const nowIso = new Date().toISOString();
+  const payload = {
+    status: 'dibatalkan',
+    deleted_at: nowIso,
+    deleted_by: currentUser.id,
+    cancelled_at: nowIso,
+    cancelled_by: currentUser.id,
+    previous_status: req?.status || null,
+    trash_expires_at: plusDaysIso(nowIso, 30)
+  };
+
+  const {error} = await sb.from('requests')
+    .update(payload)
+    .eq('id', id)
+    .eq('sender_id', currentUser.id);
+
+  if(error){showToast('Gagal membatalkan: '+getErrorMessage(error),'error');return;}
+  await cleanupNotificationsForHiddenRequest(id);
+  showToast('Request dibatalkan dan disembunyikan dari penerima.','success');
+  loadDashPage(currentDashPage);
+};
+
+// Override: request yang sudah dibatalkan/deleted tidak bisa dibuka dari notifikasi/link lama.
+const __hkOpenChatBeforeNotifGuard = window.openChat;
+window.openChat = async function(requestId) {
+  const req = await getRequestForNotifGuard(requestId);
+  if(requestHiddenFromNotification(req)) {
+    await cleanupNotificationsForHiddenRequest(requestId);
+    closeNotifDropdown();
+    showToast('Request ini sudah dihapus/dibatalkan sehingga tidak bisa dibuka lagi.', 'info');
+    if(currentDashPage) loadDashPage(currentDashPage);
+    return;
+  }
+  return __hkOpenChatBeforeNotifGuard(requestId);
+};
+
+// Override: setelah pesan dihapus, notif pesan terkait ikut dibersihkan.
+const __hkDeleteChatMessageBeforeNotifCleanup = window.deleteChatMessage;
+window.deleteChatMessage = async function(id) {
+  const before = (window._chatMsgMap || {})[id];
+  await __hkDeleteChatMessageBeforeNotifCleanup(id);
+  const after = (window._chatMsgMap || {})[id];
+  if((after?.is_deleted || after?.deleted_at) && before?.request_id) {
+    await cleanupMessageNotificationsForRequest(before.request_id);
+    await loadNotifCount();
+  }
+};
+window.deleteChatMsg = (id) => window.deleteChatMessage(id);
+// Pastikan event delegation lama yang memanggil binding lokal deleteChatMessage ikut memakai versi final.
+deleteChatMessage = window.deleteChatMessage;
+
+// Override: badge notifikasi tidak menghitung notif dari request deleted/dibatalkan.
+loadNotifCount = async function() {
+  if(!currentUser) return;
+  const {data} = await sb.from('notifications')
+    .select('id,request_id,type,title,body,is_read')
+    .eq('user_id', currentUser.id)
+    .eq('is_read', false)
+    .order('created_at', {ascending:false})
+    .limit(100);
+  const visible = await filterVisibleNotifications(data || []);
+  const count = visible.length;
+  const badge = $('notif-badge');
+  if(badge){if(count>0){badge.classList.remove('hidden');badge.textContent=count>9?'9+':count;}else badge.classList.add('hidden');}
+};
+
+// Override: dropdown notif hanya menampilkan notif yang masih valid.
+window.toggleNotifDropdown = async function(){
+  const dd=$('notif-dropdown');
+  if(!dd) return;
+  if(!dd.classList.contains('hidden')){closeNotifDropdown();return;}
+  dd.classList.remove('hidden'); notifDropOpen=true;
+  const {data}=await sb.from('notifications')
+    .select('*')
+    .eq('user_id',currentUser.id)
+    .order('created_at',{ascending:false})
+    .limit(50);
+  const notifs = await filterVisibleNotifications(data || []);
+  dd.innerHTML=`<div class="notif-header"><h4>Notifikasi</h4><button onclick="markAllRead()">Tandai semua dibaca</button></div>
+    <div class="notif-list">${notifs.length===0?'<div class="notif-empty">Tidak ada notifikasi</div>':
+      notifs.slice(0,20).map(n=>`<div class="notif-item${n.is_read?'':' unread'}" onclick="onNotifClick('${n.id}','${n.request_id||''}')">
+        <div class="notif-dot" style="${n.is_read?'background:var(--border)':''}"></div>
+        <div><p>${escapeHtml(n.title||'Notifikasi')}</p><span>${escapeHtml(n.body||'')}</span><br><span style="font-size:.72rem">${timeAgo(n.created_at)}</span></div>
+      </div>`).join('')}
+    </div>`;
+  await loadNotifCount();
+};
+
+// Override: klik notif lama dicek dulu. Kalau request sudah deleted/dibatalkan, tidak dibuka.
+window.onNotifClick = async function(nid,rid){
+  await sb.from('notifications').update({is_read:true}).eq('id',nid).eq('user_id',currentUser.id);
+  closeNotifDropdown(); loadNotifCount();
+  if(rid && rid !== 'null' && rid !== 'undefined') {
+    const req = await getRequestForNotifGuard(rid);
+    if(requestHiddenFromNotification(req)) {
+      await cleanupNotificationsForHiddenRequest(rid);
+      showToast('Notifikasi ini sudah tidak berlaku karena request sudah dihapus/dibatalkan.', 'info');
+      return;
+    }
+    openChat(rid);
+  }
+};
+
+// Override: realtime tidak menampilkan toast/browser notif untuk request yang sudah hidden.
+setupRealtime = function() {
+  realtimeSubs.forEach(s=>sb.removeChannel(s));
+  realtimeSubs=[];
+  const ch=sb.channel('notif-realtime-'+currentUser.id)
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${currentUser.id}`},async payload=>{
+      const n=payload.new;
+      if(n?.request_id) {
+        const req = await getRequestForNotifGuard(n.request_id);
+        if(requestHiddenFromNotification(req)) {
+          await cleanupNotificationsForHiddenRequest(n.request_id);
+          await loadNotifCount();
+          return;
+        }
+      }
+      await loadNotifCount();
+      showToast((n.title||'Notifikasi')+(n.body?': '+String(n.body).slice(0,60):''),'info',5000);
+      if(Notification.permission==='granted')new Notification('HaloKampus!',{body:n.title||'Notifikasi baru',icon:''});
+    }).subscribe();
+  realtimeSubs.push(ch);
+};
+
+// Override: follow-up/deadline notif hanya untuk request aktif yang belum deleted/dibatalkan.
+checkFollowup = async function(){
+  if(!currentUser) return;
+  const uid=currentUser.id;
+  const {data}=await sb.from('requests')
+    .select('id,request_code,subject,due_date,status,sender_id,deleted_at')
+    .eq('sender_id',uid)
+    .is('deleted_at', null)
+    .in('status', ACTIVE_REQUEST_STATUSES)
+    .not('due_date','is',null);
+  if(!data) return;
+  const now=new Date();
+  for(const r of data){
+    if(!isActiveRequest(r)) continue;
+    const due=new Date(r.due_date);
+    if(Number.isNaN(due.getTime())) continue;
+    if(due<now){
+      await sb.from('requests')
+        .update({status:'terlambat'})
+        .eq('id',r.id)
+        .is('deleted_at', null)
+        .neq('status','selesai')
+        .neq('status','dibatalkan')
+        .neq('status','terlambat');
+      const {data:ex}=await sb.from('notifications').select('id')
+        .eq('user_id',uid).eq('request_id',r.id).eq('type','overdue')
+        .gte('created_at',new Date(now.getTime()-3600000).toISOString()).maybeSingle();
+      if(!ex) await sb.from('notifications').insert({user_id:uid,request_id:r.id,title:'Request Terlambat',body:`Request ${r.request_code}: "${r.subject}" telah melewati tenggat waktu.`,type:'overdue'});
+    } else if((due-now)<86400000){
+      const {data:ex}=await sb.from('notifications').select('id')
+        .eq('user_id',uid).eq('request_id',r.id).eq('type','deadline_soon')
+        .gte('created_at',new Date(now.getTime()-3600000).toISOString()).maybeSingle();
+      if(!ex) await sb.from('notifications').insert({user_id:uid,request_id:r.id,title:'Request Mendekati Tenggat',body:`Request ${r.request_code}: "${r.subject}" akan jatuh tempo dalam kurang dari 24 jam.`,type:'deadline_soon'});
+    }
+  }
+};
 
 // ============================================================
 // LOGOUT
